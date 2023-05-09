@@ -1,8 +1,18 @@
 #include "rpc.h"
 #include <stdlib.h>
 
+typedef struct registered_function {
+    char *name;
+    rpc_handler handler;
+    struct registered_function *next;
+} registered_function;
+
 struct rpc_server {
     /* Add variable(s) for server state */
+    int socket_fd;                  // socket file descriptor
+    int new_fd;                     // new file descriptor for accept()
+    int port;                       // port number
+    registered_function *functions; // linked list of registered functions
 };
 
 rpc_server *rpc_init_server(int port) {
@@ -13,9 +23,7 @@ int rpc_register(rpc_server *srv, char *name, rpc_handler handler) {
     return -1;
 }
 
-void rpc_serve_all(rpc_server *srv) {
-
-}
+void rpc_serve_all(rpc_server *srv) {}
 
 struct rpc_client {
     /* Add variable(s) for client state */
@@ -37,9 +45,7 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     return NULL;
 }
 
-void rpc_close_client(rpc_client *cl) {
-
-}
+void rpc_close_client(rpc_client *cl) {}
 
 void rpc_data_free(rpc_data *data) {
     if (data == NULL) {

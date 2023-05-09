@@ -1,0 +1,13 @@
+Thanakon Kimsan, tkimsan , 1208848
+
+1. Should the server accept calls from everyone, or just a subset of users?
+
+2. Should authentication etc. be provided by the RPC framework, or by the functions that use the RPC frame-work?
+
+3. What transport layer protocol should be used? What are the trade-offs?
+
+4. In which function(s) should the socket(s) be created?
+
+5. Should rpc_client and rpc_server be allocated dynamically or statically? What are the implications for the client and server code?
+
+6. What happens if one host uses big-endian byte order and the other uses little-endian? How does that relate to “network byte order”?
