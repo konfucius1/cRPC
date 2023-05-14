@@ -1,13 +1,17 @@
 Thanakon Kimsan, tkimsan , 1208848
 
 1. Should the server accept calls from everyone, or just a subset of users?
+Depending on the privacy and security requirement, the server can accept calls from anyone. However, if there data is strictly private or used within in organizations, there should be permission and security protocols set in place. 
 
 2. Should authentication etc. be provided by the RPC framework, or by the functions that use the RPC frame-work?
 
 3. What transport layer protocol should be used? What are the trade-offs?
+TCP is suitable as it is connection oriented, well suited for RPC where data should be reliable and in-order delivery. The tradeoff over UDP however, would be cost of the speed.
 
 4. In which function(s) should the socket(s) be created?
+`rpc_init_server` and `rpc_init_client`
 
 5. Should rpc_client and rpc_server be allocated dynamically or statically? What are the implications for the client and server code?
+It is generally better practice to dynamically allocate memory so that resources are created and destroyed at runtime to better handle demands of client server calls rather than having wasted memory allocated statically. 
 
 6. What happens if one host uses big-endian byte order and the other uses little-endian? How does that relate to “network byte order”?
