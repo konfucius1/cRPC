@@ -1,8 +1,10 @@
 #define _POSIX_C_SOURCE 200112L
 
 #include "rpc.h"
+#include <arpa/inet.h>
 #include <assert.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -192,9 +194,54 @@ int rpc_register(rpc_server *srv, char *name, rpc_handler handler) {
     return 0;
 }
 
+/**
+ * From Beej's guide: helper function to get sockaddr, IPv4 or IPv6
+ */
+static void *get_in_addr(struct sockaddr *sa) {
+    if (sa->sa_family == AF_INET) {
+        return &(((struct sockaddr_in *)sa)->sin_addr);
+    }
+
+    return &(((struct sockaddr_in6 *)sa)->sin6_addr);
+}
+
 void rpc_serve_all(rpc_server *srv) {
     if (srv == NULL) {
         return;
+    }
+
+    /* reference from Beej's guide */
+    struct sockaddr_storage their_addr;
+    socklen_t addr_size;
+    char s[INET6_ADDRSTRLEN];
+
+    while (1) {
+        // accept an incoming connection
+        addr_size = sizeof their_addr;
+        srv->new_fd =
+            accept(srv->socket_fd, (struct sockaddr *)&their_addr, &addr_size);
+
+        if (srv->new_fd == -1) {
+            perror("accept");
+            continue;
+        }
+
+        // convert client IP to string
+        inet_ntop(their_addr.ss_family,
+                  get_in_addr((struct sockaddr *)&their_addr), s, sizeof s);
+
+        printf("server: got connection from %s\n", s);
+
+        // int BUFFER_SIZE = 2048;
+        // char buffer[BUFFER_SIZE];
+        // int numbytes;
+
+        // if ((numbytes = recv(srv->new_fd, buffer, BUFFER_SIZE - 1, 0)) == -1)
+        // {
+        //     perror("recv");
+        //     exit(1);
+        // }
+        // buffer[numbytes] = '\0';
     }
 }
 
@@ -227,7 +274,7 @@ rpc_client *rpc_init_client(char *addr, int port) {
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
 
-    if ((status = getaddrinfo(NULL, port_str, &hints, &res)) != 0) {
+    if ((status = getaddrinfo(addr, port_str, &hints, &res)) != 0) {
         fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
         return NULL;
     }
