@@ -192,18 +192,63 @@ int rpc_register(rpc_server *srv, char *name, rpc_handler handler) {
     return 0;
 }
 
-void rpc_serve_all(rpc_server *srv) {}
+void rpc_serve_all(rpc_server *srv) {
+    if (srv == NULL) {
+        return;
+    }
+}
 
 struct rpc_client {
-    /* Add variable(s) for client state */
+    int socket_fd;
 };
 
 struct rpc_handle {
-    /* Add variable(s) for handle */
+    char *function_name;
+    rpc_client *client;
 };
 
 rpc_client *rpc_init_client(char *addr, int port) {
-    return NULL;
+    rpc_client *client = (rpc_client *)malloc(sizeof(rpc_client));
+    if (client == NULL) {
+        return NULL;
+    }
+
+    int status;
+    struct addrinfo hints;
+    struct addrinfo *res;
+    char port_str[PORT_LEN];
+
+    // convert int port to string
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    // load up address structs with getaddrinfo(), referencing Beej's guide
+    memset(&hints, 0, sizeof hints); // ensure the struct is empty
+    hints.ai_family = AF_INET6;      // set the struct to be IPv6
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    if ((status = getaddrinfo(NULL, port_str, &hints, &res)) != 0) {
+        fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+        return NULL;
+    }
+
+    // create a socket
+    client->socket_fd =
+        socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (client->socket_fd == -1) {
+        perror("socket");
+        return NULL;
+    }
+
+    if (connect(client->socket_fd, res->ai_addr, res->ai_addrlen) == -1) {
+        perror("connect");
+        free(client);
+        return NULL;
+    }
+
+    freeaddrinfo(res);
+
+    return client;
 }
 
 rpc_handle *rpc_find(rpc_client *cl, char *name) {
