@@ -93,10 +93,35 @@ rpc_server *rpc_init_server(int port) {
  * @param function A pointer to a struct representing a registered function that
  * will be added to the server's list of available functions.
  */
-static void add_function_to_server(rpc_server *srv,
-                                   registered_function *function) {
-    function->next = srv->functions;
-    srv->functions = function;
+static void add_function_to_server(rpc_server *server,
+                                   registered_function *new_function) {
+    registered_function *current_function = server->functions;
+    registered_function *previous_function = NULL;
+
+    while (current_function != NULL) {
+        if (strcmp(current_function->name, new_function->name) == 0) {
+            if (previous_function == NULL) {
+                server->functions = current_function->next;
+            } else {
+                // link previous node and next node of current
+                previous_function->next = current_function->next;
+                printf("%s has been updated!\n", current_function->name);
+            }
+
+            // remove old function from list
+            free(current_function->name);
+            free(current_function);
+
+            break;
+        }
+
+        previous_function = current_function;
+        current_function = current_function->next;
+    }
+
+    // add new function to head of list
+    new_function->next = server->functions;
+    server->functions = new_function;
 }
 
 /**
@@ -142,6 +167,8 @@ void debug_print_registered_functions(rpc_server *srv) {
         printf("Registered function: %s\n", current_function->name);
         current_function = current_function->next;
     }
+
+    printf("\n");
 }
 /* testing */
 
