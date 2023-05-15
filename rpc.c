@@ -1,10 +1,11 @@
-#define _POSIX_C_SOURCE 200112L
+#define _POSIX_C_SOURCE 200809L
 
 #include "rpc.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,7 @@
 #define BACKLOG 10
 #define PORT_LEN 6
 #define NAME_LIMIT 1000
+#define BUFFER_SIZE 2048
 
 typedef struct registered_function {
     char *name;                       // name of the remote procedure
@@ -211,6 +213,24 @@ static void *get_in_addr(struct sockaddr *sa) {
 }
 
 /**
+ * Helper function to find function in server's registered functions
+ */
+static int function_registered(rpc_server *server, char *function_name) {
+    registered_function *current_function = server->functions;
+
+    while (current_function != NULL) {
+        if (strcmp(current_function->name, function_name) == 0) {
+            printf("function %s is found in the server\n",
+                   current_function->name);
+            return true;
+        }
+        current_function = current_function->next;
+    }
+
+    return false;
+}
+
+/**
  * Function runs on the server side, continuously accepts incoming connections,
  * receives requests from clients
  */
@@ -245,18 +265,47 @@ void rpc_serve_all(rpc_server *srv) {
         if (!fork()) {
             close(srv->socket_fd);
 
-            char buf[2048];
+            rpc_data payload;
+            char buf[BUFFER_SIZE];
             int byte_num;
 
-            if ((byte_num = recv(srv->new_fd, buf, 2048 - 1, 0)) == -1) {
+            // receive payload struct and fixed size
+            if (recv(srv->new_fd, &payload, sizeof(payload), 0) == -1) {
                 perror("recv");
-                exit(1);
+                return;
             }
 
-            buf[byte_num] = '\0';
+            // allocate memory for payload function name
+            char *function_name = malloc(payload.data1 + 1);
+            int name_length = payload.data1;
 
-            printf("client: received '%s'\n", buf);
+            // receive function name from payload
+            if (recv(srv->new_fd, function_name, name_length, 0) == -1) {
+                perror("recv");
+                free(function_name);
+                return;
+            }
 
+            function_name[payload.data1] = '\0';
+
+            printf("server: received function name '%s'\n", function_name);
+
+            // check if function is registered
+            rpc_data response;
+            if (function_registered(srv, function_name)) {
+                response.data1 = true;
+            } else {
+                response.data1 = false;
+            }
+
+            // send response to client
+            if (send(srv->new_fd, &response, sizeof(response), 0) == -1) {
+                perror("send");
+                free(function_name);
+                return;
+            }
+
+            free(function_name);
             close(srv->new_fd);
             exit(0);
         }
@@ -334,29 +383,44 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
         return NULL;
     }
 
-    // client sends a request to server (indicating function name to search for)
-    if (send(cl->socket_fd, name, strlen(name), 0) == -1) {
+    // initialize payload: purpose of data1 is to pass int to avoid memory
+    // management issues by setting data2_len = 0 and data2 = NULL */
+    rpc_data payload;
+    payload.data1 = strlen(name);
+    payload.data2 = NULL;
+    payload.data2_len = 0;
+
+    /* The above code is sending the contents of the variable `payload` over a
+    socket connection using the `send()` function. The function returns the
+    number of bytes sent, or -1 if an error occurred. */
+    if (send(cl->socket_fd, &payload, sizeof(payload), 0) == -1) {
+        perror("send");
+        return NULL;
+    }
+
+    // The above code is sending data through a socket connection using the
+    // send() function. */
+    if (send(cl->socket_fd, name, payload.data1, 0) == -1) {
         perror("send");
         return NULL;
     }
 
     // server receives the request and checks for function in register
-    char buf[2048];
-    int byte_count;
+    rpc_data response;
 
-    if ((byte_count = recv(cl->socket_fd, buf, sizeof buf, 0)) == -1) {
-        perror("recv");
+    if (recv(cl->socket_fd, &response, sizeof(response), 0) == -1) {
+        perror("receive");
         return NULL;
     }
 
-    // buf[byte_count] = '\0';
-
-    // // print buffer for testing
-    // printf("client: received '%s'\n", buf);
-
-    // server sends a response back to the client (found or not)
-
-    // client receives server's response
+    // response true if function exists in server registered functions
+    if (response.data1 == false) {
+        return NULL;
+    } else {
+        rpc_handle *function_handle = (rpc_handle *)malloc(sizeof(rpc_handle));
+        function_handle->function_name = strdup(name);
+        return function_handle;
+    }
 }
 
 rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
