@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #define BACKLOG 10
 #define PORT_LEN 6
@@ -28,6 +29,10 @@ struct rpc_server {
     registered_function *functions; // linked list of registered functions
 };
 
+/**
+ * Initialize the server by setting up a socket for the server and starts
+ * listening for incoming connections
+ */
 rpc_server *rpc_init_server(int port) {
     rpc_server *server = (rpc_server *)malloc(sizeof(rpc_server));
     if (server == NULL) {
@@ -205,6 +210,10 @@ static void *get_in_addr(struct sockaddr *sa) {
     return &(((struct sockaddr_in6 *)sa)->sin6_addr);
 }
 
+/**
+ * Function runs on the server side, continuously accepts incoming connections,
+ * receives requests from clients
+ */
 void rpc_serve_all(rpc_server *srv) {
     if (srv == NULL) {
         return;
@@ -214,6 +223,7 @@ void rpc_serve_all(rpc_server *srv) {
     struct sockaddr_storage their_addr;
     socklen_t addr_size;
     char s[INET6_ADDRSTRLEN];
+    socklen_t sin_size;
 
     while (1) {
         // accept an incoming connection
@@ -232,21 +242,33 @@ void rpc_serve_all(rpc_server *srv) {
 
         printf("server: got connection from %s\n", s);
 
-        // int BUFFER_SIZE = 2048;
-        // char buffer[BUFFER_SIZE];
-        // int numbytes;
+        if (!fork()) {
+            close(srv->socket_fd);
 
-        // if ((numbytes = recv(srv->new_fd, buffer, BUFFER_SIZE - 1, 0)) == -1)
-        // {
-        //     perror("recv");
-        //     exit(1);
-        // }
-        // buffer[numbytes] = '\0';
+            char buf[2048];
+            int byte_num;
+
+            if ((byte_num = recv(srv->new_fd, buf, 2048 - 1, 0)) == -1) {
+                perror("recv");
+                exit(1);
+            }
+
+            buf[byte_num] = '\0';
+
+            printf("client: received '%s'\n", buf);
+
+            close(srv->new_fd);
+            exit(0);
+        }
+
+        close(srv->new_fd);
     }
 }
 
 struct rpc_client {
+    char *server_address;
     int socket_fd;
+    int port;
 };
 
 struct rpc_handle {
@@ -254,6 +276,10 @@ struct rpc_handle {
     rpc_client *client;
 };
 
+/**
+ * Initialize the client by setting up address and port to make requests to the
+ * server
+ */
 rpc_client *rpc_init_client(char *addr, int port) {
     rpc_client *client = (rpc_client *)malloc(sizeof(rpc_client));
     if (client == NULL) {
@@ -298,8 +324,39 @@ rpc_client *rpc_init_client(char *addr, int port) {
     return client;
 }
 
+/**
+ * Function runs on the client side.
+ * Uses information stored in rpc_client struct to send a request to the server
+ * and receive a response
+ */
 rpc_handle *rpc_find(rpc_client *cl, char *name) {
-    return NULL;
+    if (cl == NULL || name == NULL) {
+        return NULL;
+    }
+
+    // client sends a request to server (indicating function name to search for)
+    if (send(cl->socket_fd, name, strlen(name), 0) == -1) {
+        perror("send");
+        return NULL;
+    }
+
+    // server receives the request and checks for function in register
+    char buf[2048];
+    int byte_count;
+
+    if ((byte_count = recv(cl->socket_fd, buf, sizeof buf, 0)) == -1) {
+        perror("recv");
+        return NULL;
+    }
+
+    // buf[byte_count] = '\0';
+
+    // // print buffer for testing
+    // printf("client: received '%s'\n", buf);
+
+    // server sends a response back to the client (found or not)
+
+    // client receives server's response
 }
 
 rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
