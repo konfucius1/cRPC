@@ -85,7 +85,7 @@ rpc_server *rpc_init_server(int port) {
         return NULL;
     }
 
-    printf("server: waiting for connections on port %d\n", server->port);
+    // printf("server: waiting for connections on port %d\n", server->port);
 
     freeaddrinfo(res);
 
@@ -114,7 +114,7 @@ static void add_function_to_server(rpc_server *server,
             } else {
                 // link previous node and next node of current
                 previous_function->next = current_function->next;
-                printf("%s has been updated!\n", current_function->name);
+                // printf("%s has been updated!\n", current_function->name);
             }
 
             // remove old function from list
@@ -173,11 +173,11 @@ void debug_print_registered_functions(rpc_server *srv) {
     registered_function *current_function = srv->functions;
 
     while (current_function != NULL) {
-        printf("Registered function: %s\n", current_function->name);
+        // printf("Registered function: %s\n", current_function->name);
         current_function = current_function->next;
     }
 
-    printf("\n");
+    // printf("\n");
 }
 /* testing */
 
@@ -193,10 +193,6 @@ int rpc_register(rpc_server *srv, char *name, rpc_handler handler) {
     }
 
     add_function_to_server(srv, new_function);
-
-    /* testing */
-    debug_print_registered_functions(srv);
-    /* testing */
 
     return 0;
 }
@@ -220,8 +216,8 @@ static int function_registered(rpc_server *server, char *function_name) {
 
     while (current_function != NULL) {
         if (strcmp(current_function->name, function_name) == 0) {
-            printf("function %s is found in the server\n",
-                   current_function->name);
+            // printf("function %s is found in the server\n",
+            //    current_function->name);
             return true;
         }
         current_function = current_function->next;
@@ -260,7 +256,7 @@ void rpc_serve_all(rpc_server *srv) {
         inet_ntop(their_addr.ss_family,
                   get_in_addr((struct sockaddr *)&their_addr), s, sizeof s);
 
-        printf("server: got connection from %s\n", s);
+        // printf("server: got connection from %s\n", s);
 
         if (!fork()) {
             close(srv->socket_fd);
@@ -288,7 +284,7 @@ void rpc_serve_all(rpc_server *srv) {
 
             function_name[payload.data1] = '\0';
 
-            printf("server: received function name '%s'\n", function_name);
+            // printf("server: received function name '%s'\n", function_name);
 
             // check if function is registered
             rpc_data response;
