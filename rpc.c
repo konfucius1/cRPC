@@ -173,7 +173,7 @@ void debug_print_registered_functions(rpc_server *srv) {
     registered_function *current_function = srv->functions;
 
     while (current_function != NULL) {
-        // printf("Registered function: %s\n", current_function->name);
+        printf("Registered function: %s\n", current_function->name);
         current_function = current_function->next;
     }
 
@@ -216,14 +216,28 @@ static int function_registered(rpc_server *server, char *function_name) {
 
     while (current_function != NULL) {
         if (strcmp(current_function->name, function_name) == 0) {
-            // printf("function %s is found in the server\n",
-            //    current_function->name);
+            printf("function %s is found in the server\n",
+                   current_function->name);
             return true;
         }
         current_function = current_function->next;
     }
 
     return false;
+}
+
+static registered_function *find_function(rpc_server *srv,
+                                          char *function_name) {
+    registered_function *current = srv->functions;
+
+    while (current != NULL) {
+        if (strcmp(current->name, function_name) == 0) {
+            return current;
+        }
+        current = current->next;
+    }
+
+    return NULL; // if no match is found
 }
 
 /**
@@ -256,56 +270,77 @@ void rpc_serve_all(rpc_server *srv) {
         inet_ntop(their_addr.ss_family,
                   get_in_addr((struct sockaddr *)&their_addr), s, sizeof s);
 
-        // printf("server: got connection from %s\n", s);
+        printf("server: got connection from %s\n", s);
 
-        if (!fork()) {
-            close(srv->socket_fd);
+        rpc_data request;
 
-            rpc_data payload;
-            char buf[BUFFER_SIZE];
-            int byte_num;
+        while (1) {
 
-            // receive payload struct and fixed size
-            if (recv(srv->new_fd, &payload, sizeof(payload), 0) == -1) {
+            // receive request struct and fixed size
+            if (recv(srv->new_fd, &request, sizeof(request), 0) == -1) {
                 perror("recv");
                 return;
             }
 
-            // allocate memory for payload function name
-            char *function_name = malloc(payload.data1 + 1);
-            int name_length = payload.data1;
+            printf("\nrequest: data1: %d\n", request.data1);
+            printf("request: data2_len: %ld\n", request.data2_len);
 
-            // receive function name from payload
+            // allocate memory for request function name
+            char *function_name = malloc(request.data1 + 1);
+            int name_length = request.data1;
+
+            // receive function name from request
             if (recv(srv->new_fd, function_name, name_length, 0) == -1) {
                 perror("recv");
                 free(function_name);
                 return;
             }
 
-            function_name[payload.data1] = '\0';
+            printf("request: function_name: %s\n", function_name);
 
-            // printf("server: received function name '%s'\n", function_name);
+            function_name[request.data1] = '\0';
 
+            rpc_data *response;
             // check if function is registered
-            rpc_data response;
-            if (function_registered(srv, function_name)) {
-                response.data1 = true;
+            if (request.data2_len == 0) {
+                response = malloc(sizeof(rpc_data));
+                if (function_registered(srv, function_name)) {
+                    response->data1 = true;
+                } else {
+                    response->data1 = false;
+                }
             } else {
-                response.data1 = false;
+                printf("this is rpc call\n");
+                registered_function *function =
+                    find_function(srv, function_name);
+                if (function == NULL) {
+                    perror("function not found");
+                    free(function_name);
+                    close(srv->new_fd);
+                    continue;
+                }
+
+                char *args = malloc(request.data2_len);
+                if (recv(srv->new_fd, args, request.data2_len, 0) == -1) {
+                    perror("recv");
+                    free(args);
+                    free(function_name);
+                    close(srv->new_fd);
+                    continue;
+                }
+
+                rpc_data function_args = {.data2_len = request.data2_len,
+                                          .data2 = args};
+                response = function->handler(&function_args);
+                free(args);
             }
 
-            // send response to client
-            if (send(srv->new_fd, &response, sizeof(response), 0) == -1) {
+            if (send(srv->new_fd, &response, sizeof(rpc_data), 0) == -1) {
                 perror("send");
-                free(function_name);
-                return;
             }
 
             free(function_name);
-            close(srv->new_fd);
-            exit(0);
         }
-
         close(srv->new_fd);
     }
 }
@@ -318,12 +353,11 @@ struct rpc_client {
 
 struct rpc_handle {
     char *function_name;
-    rpc_client *client;
 };
 
 /**
- * Initialize the client by setting up address and port to make requests to the
- * server
+ * Initialize the client by setting up address and port to make requests to
+ * the server
  */
 rpc_client *rpc_init_client(char *addr, int port) {
     rpc_client *client = (rpc_client *)malloc(sizeof(rpc_client));
@@ -371,8 +405,8 @@ rpc_client *rpc_init_client(char *addr, int port) {
 
 /**
  * Function runs on the client side.
- * Uses information stored in rpc_client struct to send a request to the server
- * and receive a response
+ * Uses information stored in rpc_client struct to send a request to the
+ * server and receive a response
  */
 rpc_handle *rpc_find(rpc_client *cl, char *name) {
     if (cl == NULL || name == NULL) {
@@ -381,14 +415,10 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
 
     // initialize payload: purpose of data1 is to pass int to avoid memory
     // management issues by setting data2_len = 0 and data2 = NULL */
-    rpc_data payload;
-    payload.data1 = strlen(name);
-    payload.data2 = NULL;
-    payload.data2_len = 0;
+    rpc_data payload = {.data1 = strlen(name), .data2 = NULL, .data2_len = 0};
 
-    /* The above code is sending the contents of the variable `payload` over a
-    socket connection using the `send()` function. The function returns the
-    number of bytes sent, or -1 if an error occurred. */
+    // The above code is sending the contents of the variable `payload` over
+    // a socket connection
     if (send(cl->socket_fd, &payload, sizeof(payload), 0) == -1) {
         perror("send");
         return NULL;
@@ -420,7 +450,49 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
 }
 
 rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
-    return NULL;
+    if (cl == NULL || h == NULL || payload == NULL) {
+        return NULL;
+    }
+
+    // get length of function name
+    int function_name_len = strlen(h->function_name);
+
+    rpc_data request = {.data1 = function_name_len,
+                        .data2 = payload->data2,
+                        .data2_len = payload->data2_len};
+
+    // send request structure
+    if (send(cl->socket_fd, &request, sizeof(request), 0) == -1) {
+        perror("send");
+        return NULL;
+    }
+
+    // send function name
+    if (send(cl->socket_fd, h->function_name, function_name_len, 0) == -1) {
+        perror("send");
+        return NULL;
+    }
+
+    if (payload->data2 != NULL) {
+        if (send(cl->socket_fd, payload->data2, payload->data2_len, 0) == -1) {
+            perror("send");
+            return NULL;
+        }
+    }
+
+    rpc_data *response = malloc(sizeof(rpc_data));
+    if (response == NULL) {
+        perror("malloc");
+        return NULL;
+    }
+
+    if (recv(cl->socket_fd, response, sizeof(rpc_data), 0) == -1) {
+        perror("recv");
+        free(response);
+        return NULL;
+    }
+
+    return response;
 }
 
 void rpc_close_client(rpc_client *cl) {}
