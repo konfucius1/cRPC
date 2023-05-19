@@ -456,7 +456,6 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
 
 rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     if (cl == NULL || h == NULL || payload == NULL) {
-        perror("null");
         return NULL;
     }
 
@@ -477,17 +476,17 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
                         .data2 = payload->data2,
                         .data2_len = payload->data2_len};
 
-    /* print request_data */
-    printf("Request Data: \n");
-    printf("data1: %d \n", request.data1);
-    printf("data2_len: %ld \n", request.data2_len);
-    if (request.data2 != NULL) {
-        printf("data2: %d\n", *((char *)request.data2));
-    } else {
-        printf("data2: NULL\n");
-    }
+    // /* print request_data */
+    // printf("Request Data: \n");
+    // printf("data1: %d \n", request.data1);
+    // printf("data2_len: %ld \n", request.data2_len);
+    // if (request.data2 != NULL) {
+    //     printf("data2: %d\n", *((char *)request.data2));
+    // } else {
+    //     printf("data2: NULL\n");
+    // }
 
-    printf("------------------------\n");
+    // printf("------------------------\n");
 
     // prepare the buffer for serialization
     size_t buffer_size = sizeof(rpc_data) + request.data2_len;
