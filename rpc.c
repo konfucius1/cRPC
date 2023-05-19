@@ -17,18 +17,20 @@
 #define PORT_LEN 6
 #define NAME_LIMIT 1000
 #define BUFFER_SIZE 2048
+#define MAX_FUNCTIONS 10
 
 typedef struct registered_function {
-    char *name;                       // name of the remote procedure
-    rpc_handler handler;              // function to the remote procedure
-    struct registered_function *next; // pointer to the next function
+    char *name;          // name of the remote procedure
+    rpc_handler handler; // function to the remote procedure
 } registered_function;
 
 struct rpc_server {
-    int socket_fd;                  // socket file descriptor
-    int new_fd;                     // new file descriptor for accept()
-    int port;                       // port number
-    registered_function *functions; // linked list of registered functions
+    int socket_fd; // socket file descriptor
+    int new_fd;    // new file descriptor for accept()
+    int port;      // port number
+    registered_function
+        functions[MAX_FUNCTIONS]; // array of registered functions
+    int functions_count;          // number of registered functions
 };
 
 /**
@@ -44,7 +46,7 @@ rpc_server *rpc_init_server(int port) {
     // initialize server attributes
     server->port = port;
     server->new_fd = -1;
-    server->functions = NULL;
+    server->functions_count = 0;
 
     int status;
     struct addrinfo hints;
@@ -85,66 +87,31 @@ rpc_server *rpc_init_server(int port) {
         return NULL;
     }
 
-    // printf("server: waiting for connections on port %d\n", server->port);
-
     freeaddrinfo(res);
 
     return server;
 }
 
-/* helper functions for rpc_register */
-
-/**
- * The function adds a registered function to a given RPC server.
- *
- * @param srv A pointer to an instance of the rpc_server struct, which
- * represents an RPC server.
- * @param function A pointer to a struct representing a registered function that
- * will be added to the server's list of available functions.
- */
+// Function to add a registered function to the server
 static void add_function_to_server(rpc_server *server,
                                    registered_function *new_function) {
-    registered_function *current_function = server->functions;
-    registered_function *previous_function = NULL;
-
-    while (current_function != NULL) {
-        if (strcmp(current_function->name, new_function->name) == 0) {
-            if (previous_function == NULL) {
-                server->functions = current_function->next;
-            } else {
-                // link previous node and next node of current
-                previous_function->next = current_function->next;
-                // printf("%s has been updated!\n", current_function->name);
-            }
-
-            // remove old function from list
-            free(current_function->name);
-            free(current_function);
-
-            break;
+    for (int i = 0; i < server->functions_count; i++) {
+        if (strcmp(server->functions[i].name, new_function->name) == 0) {
+            // Function with the same name already exists, replace it
+            server->functions[i] = *new_function;
+            return;
         }
-
-        previous_function = current_function;
-        current_function = current_function->next;
     }
 
-    // add new function to head of list
-    new_function->next = server->functions;
-    server->functions = new_function;
+    // If the function does not exist, add it to the array
+    if (server->functions_count < MAX_FUNCTIONS) {
+        server->functions[server->functions_count] = *new_function;
+        server->functions_count++;
+    } else {
+        fprintf(stderr, "Maximum number of registered functions reached.\n");
+    }
 }
 
-/**
- * Creates a new registered function with a given name and handler and returns
- * a pointer to it.
- *
- * @param name A string representing the name of the function being registered.
- * @param handler The `handler` parameter is a function pointer to the RPC
- * handler function that will be associated with the registered function.
- * This handler function will be called when the registered function is invoked
- * remotely.
- *
- * @return a pointer to a newly created `registered_function` struct.
- */
 static registered_function *create_function(char *name, rpc_handler handler) {
     registered_function *new_function =
         (registered_function *)malloc(sizeof(registered_function));
@@ -153,33 +120,11 @@ static registered_function *create_function(char *name, rpc_handler handler) {
         return NULL;
     }
 
-    new_function->name = (char *)malloc(NAME_LIMIT + 1 * sizeof(char));
-    if (new_function->name == NULL) {
-        free(new_function);
-        return NULL;
-    }
-
-    strncpy(new_function->name, name, NAME_LIMIT);
-    new_function->name[NAME_LIMIT] = '\0';
-
+    new_function->name = strdup(name);
     new_function->handler = handler;
-    new_function->next = NULL;
 
     return new_function;
 }
-
-/* testing */
-void debug_print_registered_functions(rpc_server *srv) {
-    registered_function *current_function = srv->functions;
-
-    while (current_function != NULL) {
-        printf("Registered function: %s\n", current_function->name);
-        current_function = current_function->next;
-    }
-
-    // printf("\n");
-}
-/* testing */
 
 int rpc_register(rpc_server *srv, char *name, rpc_handler handler) {
     // handle null arguments
@@ -208,139 +153,166 @@ static void *get_in_addr(struct sockaddr *sa) {
     return &(((struct sockaddr_in6 *)sa)->sin6_addr);
 }
 
-/**
- * Helper function to find function in server's registered functions
- */
-static int function_registered(rpc_server *server, char *function_name) {
-    registered_function *current_function = server->functions;
+static int find_function_index(rpc_server *server, char *function_name) {
+    registered_function *functions = server->functions;
 
-    while (current_function != NULL) {
-        if (strcmp(current_function->name, function_name) == 0) {
-            printf("function %s is found in the server\n",
-                   current_function->name);
-            return true;
+    for (int i = 0; i < server->functions_count; i++) {
+        if (strcmp(functions[i].name, function_name) == 0) {
+            // printf("function found at index: %d\n", i);
+            return i;
         }
-        current_function = current_function->next;
     }
 
-    return false;
+    return -1; // Function not found
 }
 
-static registered_function *find_function(rpc_server *srv,
-                                          char *function_name) {
-    registered_function *current = srv->functions;
+static rpc_data *handle_lookup_request(rpc_server *srv, rpc_data *request,
+                                       int socket_fd) {
+    char *function_name = malloc(request->data1 + 1);
+    rpc_data *response = malloc(sizeof(rpc_data));
 
-    while (current != NULL) {
-        if (strcmp(current->name, function_name) == 0) {
-            return current;
-        }
-        current = current->next;
+    if (recv(socket_fd, function_name, request->data1, 0) == -1) {
+        perror("recv");
+        free(function_name);
+        free(response);
+        return NULL;
     }
 
-    return NULL; // if no match is found
+    function_name[request->data1] = '\0';
+
+    int function_index = find_function_index(srv, function_name);
+
+    if (function_index != -1) {
+        response->data1 = function_index;
+    } else {
+        response->data1 = -1;
+    }
+
+    // serialize the response into a byte stream
+    size_t response_len = sizeof(int);
+    char response_buffer[response_len];
+    memcpy(response_buffer, &(response->data1), sizeof(int));
+
+    // send the response byte stream
+    if (send(socket_fd, response_buffer, response_len, 0) == -1) {
+        perror("send");
+    }
+
+    free(function_name);
+    return response;
 }
 
+static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
+                                            int function_index, int socket_fd) {
+    rpc_handler *function = &(srv->functions[function_index].handler);
+    char *data2 = malloc(request->data2_len);
+
+    if (recv(socket_fd, data2, request->data2_len, 0) == -1) {
+        perror("recv");
+        free(data2);
+        return NULL;
+    }
+
+    request->data2 = data2;
+
+    rpc_data *response = (*function)(request);
+
+    // serialize the response into a byte stream
+    size_t response_len = sizeof(int);
+    char response_buffer[response_len];
+    memcpy(response_buffer, &(response->data1), sizeof(int));
+
+    // send the response byte stream
+    if (send(socket_fd, response_buffer, response_len, 0) == -1) {
+        perror("send");
+    }
+
+    free(data2);
+    return response;
+}
 /**
- * Function runs on the server side, continuously accepts incoming connections,
- * receives requests from clients
+ * Function runs on the server side, continuously accepts incoming
+ * connections, receives requests from clients
  */
 void rpc_serve_all(rpc_server *srv) {
     if (srv == NULL) {
         return;
     }
 
-    /* reference from Beej's guide */
+    /* Reference from Beej's guide */
     struct sockaddr_storage their_addr;
     socklen_t addr_size;
     char s[INET6_ADDRSTRLEN];
-    socklen_t sin_size;
 
     while (1) {
+        printf("Waiting for connection...\n");
+
         // accept an incoming connection
-        addr_size = sizeof their_addr;
+        addr_size = sizeof(their_addr);
         srv->new_fd =
             accept(srv->socket_fd, (struct sockaddr *)&their_addr, &addr_size);
-
         if (srv->new_fd == -1) {
             perror("accept");
             continue;
         }
 
+        printf("Connection accepted.\n");
         // convert client IP to string
         inet_ntop(their_addr.ss_family,
-                  get_in_addr((struct sockaddr *)&their_addr), s, sizeof s);
+                  get_in_addr((struct sockaddr *)&their_addr), s, sizeof(s));
 
-        printf("server: got connection from %s\n", s);
-
-        rpc_data request;
-
+        int function_index = 0;
         while (1) {
+            rpc_data *response = NULL;
 
-            // receive request struct and fixed size
-            if (recv(srv->new_fd, &request, sizeof(request), 0) == -1) {
-                perror("recv");
-                return;
-            }
+            printf("Waiting for data...\n");
 
-            printf("\nrequest: data1: %d\n", request.data1);
-            printf("request: data2_len: %ld\n", request.data2_len);
-
-            // allocate memory for request function name
-            char *function_name = malloc(request.data1 + 1);
-            int name_length = request.data1;
-
-            // receive function name from request
-            if (recv(srv->new_fd, function_name, name_length, 0) == -1) {
-                perror("recv");
-                free(function_name);
-                return;
-            }
-
-            printf("request: function_name: %s\n", function_name);
-
-            function_name[request.data1] = '\0';
-
-            rpc_data *response;
-            // check if function is registered
-            if (request.data2_len == 0) {
-                response = malloc(sizeof(rpc_data));
-                if (function_registered(srv, function_name)) {
-                    response->data1 = true;
+            // receive request byte stream
+            size_t request_len = sizeof(rpc_data);
+            char request_buffer[request_len];
+            ssize_t bytes_received =
+                recv(srv->new_fd, request_buffer, request_len, 0);
+            if (bytes_received <= 0) {
+                if (bytes_received == 0) {
+                    printf("Connection closed by client.\n");
                 } else {
-                    response->data1 = false;
-                }
-            } else {
-                printf("this is rpc call\n");
-                registered_function *function =
-                    find_function(srv, function_name);
-                if (function == NULL) {
-                    perror("function not found");
-                    free(function_name);
-                    close(srv->new_fd);
-                    continue;
-                }
-
-                char *args = malloc(request.data2_len);
-                if (recv(srv->new_fd, args, request.data2_len, 0) == -1) {
                     perror("recv");
-                    free(args);
-                    free(function_name);
-                    close(srv->new_fd);
-                    continue;
                 }
-
-                rpc_data function_args = {.data2_len = request.data2_len,
-                                          .data2 = args};
-                response = function->handler(&function_args);
-                free(args);
+                break;
             }
 
-            if (send(srv->new_fd, &response, sizeof(rpc_data), 0) == -1) {
-                perror("send");
+            // copy the received byte stream into an rpc_data struct
+            rpc_data request;
+            memcpy(&request, request_buffer, request_len);
+
+            printf("Data received.\n");
+            printf("data1: %d\n", request.data1);
+            printf("data2_len: %zu\n", request.data2_len);
+
+            if (request.data2_len == 0) {
+                printf("handle for lookup request\n");
+                response = handle_lookup_request(srv, &request, srv->new_fd);
+                function_index = response->data1;
+                printf("response->data1: %d\n", response->data1);
+            } else {
+                printf("handle for function call request\n");
+                printf("function_index: %d\n", function_index);
+                response = handle_function_invocation(
+                    srv, &request, function_index, srv->new_fd);
+                printf("response: %d\n", response->data1);
             }
 
-            free(function_name);
+            printf("\tresponse: %d\n", response->data1);
+            // send the response data1 to the client
+            if (response != NULL) {
+                if (send(srv->new_fd, &(response->data1), sizeof(int), 0) ==
+                    -1) {
+                    perror("send");
+                }
+                free(response);
+            }
         }
+
         close(srv->new_fd);
     }
 }
@@ -352,7 +324,7 @@ struct rpc_client {
 };
 
 struct rpc_handle {
-    char *function_name;
+    int index;
 };
 
 /**
@@ -403,94 +375,110 @@ rpc_client *rpc_init_client(char *addr, int port) {
     return client;
 }
 
-/**
- * Function runs on the client side.
- * Uses information stored in rpc_client struct to send a request to the
- * server and receive a response
- */
 rpc_handle *rpc_find(rpc_client *cl, char *name) {
+    printf("client: rpc_find being called\n");
+
     if (cl == NULL || name == NULL) {
         return NULL;
     }
 
-    // initialize payload: purpose of data1 is to pass int to avoid memory
-    // management issues by setting data2_len = 0 and data2 = NULL */
-    rpc_data payload = {.data1 = strlen(name), .data2 = NULL, .data2_len = 0};
+    // prepare the request struct
+    rpc_data request = {.data1 = strlen(name), .data2 = NULL, .data2_len = 0};
 
-    // The above code is sending the contents of the variable `payload` over
-    // a socket connection
-    if (send(cl->socket_fd, &payload, sizeof(payload), 0) == -1) {
+    // prepare the payload byte stream
+    size_t payload_len = sizeof(rpc_data) + strlen(name);
+    char payload[payload_len];
+    memcpy(payload, &request, sizeof(rpc_data));
+    memcpy(payload + sizeof(rpc_data), name, strlen(name));
+
+    // send the payload
+    if (send(cl->socket_fd, payload, payload_len, 0) == -1) {
         perror("send");
         return NULL;
     }
 
-    // The above code is sending data through a socket connection using the
-    // send() function. */
-    if (send(cl->socket_fd, name, payload.data1, 0) == -1) {
-        perror("send");
-        return NULL;
-    }
-
-    // server receives the request and checks for function in register
     rpc_data response;
-
-    if (recv(cl->socket_fd, &response, sizeof(response), 0) == -1) {
+    if (recv(cl->socket_fd, &response, sizeof(rpc_data), 0) == -1) {
         perror("receive");
         return NULL;
     }
 
-    // response true if function exists in server registered functions
-    if (response.data1 == false) {
+    if (response.data1 == -1) {
         return NULL;
     } else {
         rpc_handle *function_handle = (rpc_handle *)malloc(sizeof(rpc_handle));
-        function_handle->function_name = strdup(name);
+        function_handle->index = response.data1;
         return function_handle;
     }
 }
 
 rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
+    printf("client: rpc_call being called\n");
+
     if (cl == NULL || h == NULL || payload == NULL) {
+        printf("Error: NULL argument passed.\n");
         return NULL;
     }
 
-    // get length of function name
-    int function_name_len = strlen(h->function_name);
-
-    rpc_data request = {.data1 = function_name_len,
+    // prepare the request struct
+    rpc_data request = {.data1 = payload->data1,
                         .data2 = payload->data2,
                         .data2_len = payload->data2_len};
 
-    // send request structure
-    if (send(cl->socket_fd, &request, sizeof(request), 0) == -1) {
+    /* print request_data */
+    printf("Request Data: ");
+    printf("data1: %d ", request.data1);
+    printf("data2_len: %ld ", request.data2_len);
+    if (request.data2 != NULL) {
+        printf("data2: %d\n", *((char *)request.data2));
+    } else {
+        printf("data2: NULL\n");
+    }
+
+    // prepare the buffer for serialization
+    size_t buffer_size = sizeof(rpc_data) + request.data2_len;
+    char buffer[buffer_size];
+    size_t offset = 0;
+
+    // serialize the request struct into the buffer
+    memcpy(buffer, &request, sizeof(rpc_data));
+    offset += sizeof(rpc_data);
+
+    // serialize the payload data2 into the buffer if it exists
+    if (request.data2_len > 0 && request.data2 != NULL) {
+        memcpy(buffer + offset, request.data2, request.data2_len);
+        offset += request.data2_len;
+    }
+
+    // send the serialized data to the server
+    if (send(cl->socket_fd, buffer, buffer_size, 0) == -1) {
         perror("send");
         return NULL;
     }
 
-    // send function name
-    if (send(cl->socket_fd, h->function_name, function_name_len, 0) == -1) {
-        perror("send");
+    int response_data1;
+    memset(&response_data1, 0, sizeof(int));
+
+    printf("\tresponse_data: %d\n", response_data1);
+
+    if (recv(cl->socket_fd, &response_data1, sizeof(int), 0) == -1) {
+        perror("recv");
         return NULL;
     }
 
-    if (payload->data2 != NULL) {
-        if (send(cl->socket_fd, payload->data2, payload->data2_len, 0) == -1) {
-            perror("send");
-            return NULL;
-        }
-    }
+    printf("\tresponse_data: %d\n", response_data1);
 
+    // create and populate the response struct
     rpc_data *response = malloc(sizeof(rpc_data));
     if (response == NULL) {
         perror("malloc");
         return NULL;
     }
+    response->data1 = response_data1;
+    response->data2_len = 0;
+    response->data2 = NULL;
 
-    if (recv(cl->socket_fd, response, sizeof(rpc_data), 0) == -1) {
-        perror("recv");
-        free(response);
-        return NULL;
-    }
+    printf("response in rpc_call: %d\n", response->data1);
 
     return response;
 }
