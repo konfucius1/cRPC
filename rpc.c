@@ -429,14 +429,10 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
         return NULL;
     }
 
-    // Prepare the request struct
+    // prepare the request struct
     rpc_data request = {.data1 = payload->data1,
                         .data2 = payload->data2,
                         .data2_len = payload->data2_len};
-
-    if (request.data2_len == 0 || request.data2 == NULL) {
-        return NULL;
-    }
 
     // /* Print request_data */
     // printf("Request Data: ");
@@ -448,22 +444,22 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     //     printf("data2: NULL\n");
     // }
 
-    // Prepare the buffer for serialization
+    // prepare the buffer for serialization
     size_t buffer_size = sizeof(rpc_data) + request.data2_len;
     char buffer[buffer_size];
     size_t offset = 0;
 
-    // Serialize the request struct into the buffer
+    // serialize the request struct into the buffer
     memcpy(buffer, &request, sizeof(rpc_data));
     offset += sizeof(rpc_data);
 
-    // Serialize the payload data2 into the buffer if it exists
+    // serialize the payload data2 into the buffer if it exists
     if (request.data2_len > 0 && request.data2 != NULL) {
         memcpy(buffer + offset, request.data2, request.data2_len);
         offset += request.data2_len;
     }
 
-    // Send the serialized data to the server
+    // send the serialized data to the server
     if (send(cl->socket_fd, buffer, buffer_size, 0) == -1) {
         perror("send");
         return NULL;
@@ -473,25 +469,33 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     memset(&response_data1, 0,
            sizeof(int)); // Reset the memory of response_data1
 
-    // printf("\tresponse_data: %d\n", response_data1);
-
     if (recv(cl->socket_fd, &response_data1, sizeof(int), 0) == -1) {
         perror("recv");
         return NULL;
     }
 
-    // printf("\tresponse_data: %d\n", response_data1);
-
-    // Create and populate the response struct
+    // create and populate the response struct
     rpc_data *response = malloc(sizeof(rpc_data));
     if (response == NULL) {
         perror("malloc");
         return NULL;
     }
-    response->data1 = response_data1;
-    response->data2_len = 0;
-    response->data2 = NULL;
 
+    response->data1 = response_data1;
+    response->data2_len = payload->data2_len;
+
+    // allocate memory for data2 and copy the content from payload->data2
+    if (payload->data2_len > 0 && payload->data2 != NULL) {
+        response->data2 = malloc(payload->data2_len);
+        if (response->data2 == NULL) {
+            perror("malloc");
+            free(response);
+            return NULL;
+        }
+        memcpy(response->data2, payload->data2, payload->data2_len);
+    } else {
+        response->data2 = NULL;
+    }
     // printf("response in rpc_call: %d\n", response->data1);
 
     return response;
