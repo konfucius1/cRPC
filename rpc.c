@@ -188,12 +188,12 @@ static rpc_data *handle_lookup_request(rpc_server *srv, rpc_data *request,
         response->data1 = -1;
     }
 
-    // serialize the response into a byte stream
+    // Serialize the response into a byte stream
     size_t response_len = sizeof(int);
     char response_buffer[response_len];
     memcpy(response_buffer, &(response->data1), sizeof(int));
 
-    // send the response byte stream
+    // Send the response byte stream
     if (send(socket_fd, response_buffer, response_len, 0) == -1) {
         perror("send");
     }
@@ -217,12 +217,17 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
 
     rpc_data *response = (*function)(request);
 
-    // serialize the response into a byte stream
+    if (response == NULL) {
+        free(data2);
+        return NULL;
+    }
+
+    // Serialize the response into a byte stream
     size_t response_len = sizeof(int);
     char response_buffer[response_len];
     memcpy(response_buffer, &(response->data1), sizeof(int));
 
-    // send the response byte stream
+    // Send the response byte stream
     if (send(socket_fd, response_buffer, response_len, 0) == -1) {
         perror("send");
     }
@@ -230,6 +235,7 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
     free(data2);
     return response;
 }
+
 /**
  * Function runs on the server side, continuously accepts incoming
  * connections, receives requests from clients
@@ -245,9 +251,9 @@ void rpc_serve_all(rpc_server *srv) {
     char s[INET6_ADDRSTRLEN];
 
     while (1) {
-        printf("Waiting for connection...\n");
+        // printf("Waiting for connection...\n");
 
-        // accept an incoming connection
+        // Accept an incoming connection
         addr_size = sizeof(their_addr);
         srv->new_fd =
             accept(srv->socket_fd, (struct sockaddr *)&their_addr, &addr_size);
@@ -256,8 +262,8 @@ void rpc_serve_all(rpc_server *srv) {
             continue;
         }
 
-        printf("Connection accepted.\n");
-        // convert client IP to string
+        // printf("Connection accepted.\n");
+        // Convert client IP to string
         inet_ntop(their_addr.ss_family,
                   get_in_addr((struct sockaddr *)&their_addr), s, sizeof(s));
 
@@ -265,52 +271,55 @@ void rpc_serve_all(rpc_server *srv) {
         while (1) {
             rpc_data *response = NULL;
 
-            printf("Waiting for data...\n");
+            // printf("Waiting for data...\n");
 
-            // receive request byte stream
+            // Receive request byte stream
             size_t request_len = sizeof(rpc_data);
             char request_buffer[request_len];
             ssize_t bytes_received =
                 recv(srv->new_fd, request_buffer, request_len, 0);
             if (bytes_received <= 0) {
-                if (bytes_received == 0) {
-                    printf("Connection closed by client.\n");
-                } else {
-                    perror("recv");
-                }
+                // testing byte stream
+                // if (bytes_received == 0) {
+                //     printf("Connection closed by client.\n");
+                // } else {
+                //     perror("recv");
+                // }
                 break;
             }
 
-            // copy the received byte stream into an rpc_data struct
+            // Copy the received byte stream into an rpc_data struct
             rpc_data request;
             memcpy(&request, request_buffer, request_len);
 
-            printf("Data received.\n");
-            printf("data1: %d\n", request.data1);
-            printf("data2_len: %zu\n", request.data2_len);
+            // printf("Data received.\n");
+            // printf("data1: %d\n", request.data1);
+            // printf("data2_len: %zu\n", request.data2_len);
 
             if (request.data2_len == 0) {
-                printf("handle for lookup request\n");
+                // printf("handle for lookup request\n");
                 response = handle_lookup_request(srv, &request, srv->new_fd);
                 function_index = response->data1;
-                printf("response->data1: %d\n", response->data1);
+                // printf("function_index: %d\n", response->data1);
             } else {
-                printf("handle for function call request\n");
-                printf("function_index: %d\n", function_index);
+                // printf("handle for function call request\n");
                 response = handle_function_invocation(
                     srv, &request, function_index, srv->new_fd);
-                printf("response: %d\n", response->data1);
+                // printf("response: %d\n", response->data1);
             }
 
-            printf("\tresponse: %d\n", response->data1);
-            // send the response data1 to the client
-            if (response != NULL) {
-                if (send(srv->new_fd, &(response->data1), sizeof(int), 0) ==
-                    -1) {
-                    perror("send");
-                }
-                free(response);
-            }
+            // printf("\tresponse: %d\n", response->data1);
+
+            // // Send the response data1 to the client
+            // if (response != NULL) {
+            //     printf("\tresponse: %d\n", response->data1);
+            //     if (send(srv->new_fd, &(response->data1), sizeof(int), 0) ==
+            //         -1) {
+            //         perror("send");
+            //     }
+
+            //     free(response);
+            // }
         }
 
         close(srv->new_fd);
@@ -376,8 +385,6 @@ rpc_client *rpc_init_client(char *addr, int port) {
 }
 
 rpc_handle *rpc_find(rpc_client *cl, char *name) {
-    printf("client: rpc_find being called\n");
-
     if (cl == NULL || name == NULL) {
         return NULL;
     }
@@ -385,13 +392,13 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
     // prepare the request struct
     rpc_data request = {.data1 = strlen(name), .data2 = NULL, .data2_len = 0};
 
-    // prepare the payload byte stream
+    // Prepare the payload byte stream
     size_t payload_len = sizeof(rpc_data) + strlen(name);
     char payload[payload_len];
     memcpy(payload, &request, sizeof(rpc_data));
     memcpy(payload + sizeof(rpc_data), name, strlen(name));
 
-    // send the payload
+    // Send the payload
     if (send(cl->socket_fd, payload, payload_len, 0) == -1) {
         perror("send");
         return NULL;
@@ -413,62 +420,69 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
 }
 
 rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
-    printf("client: rpc_call being called\n");
-
     if (cl == NULL || h == NULL || payload == NULL) {
-        printf("Error: NULL argument passed.\n");
         return NULL;
     }
 
-    // prepare the request struct
+    if (payload->data2_len >= 100000) {
+        fprintf(stderr, "Overlength error");
+        return NULL;
+    }
+
+    // Prepare the request struct
     rpc_data request = {.data1 = payload->data1,
                         .data2 = payload->data2,
                         .data2_len = payload->data2_len};
 
-    /* print request_data */
-    printf("Request Data: ");
-    printf("data1: %d ", request.data1);
-    printf("data2_len: %ld ", request.data2_len);
-    if (request.data2 != NULL) {
-        printf("data2: %d\n", *((char *)request.data2));
-    } else {
-        printf("data2: NULL\n");
+    if (request.data2_len == 0 || request.data2 == NULL) {
+        return NULL;
     }
 
-    // prepare the buffer for serialization
+    // /* Print request_data */
+    // printf("Request Data: ");
+    // printf("data1: %d ", request.data1);
+    // printf("data2_len: %ld ", request.data2_len);
+    // if (request.data2 != NULL) {
+    //     printf("data2: %d\n", *((char *)request.data2));
+    // } else {
+    //     printf("data2: NULL\n");
+    // }
+
+    // Prepare the buffer for serialization
     size_t buffer_size = sizeof(rpc_data) + request.data2_len;
     char buffer[buffer_size];
     size_t offset = 0;
 
-    // serialize the request struct into the buffer
+    // Serialize the request struct into the buffer
     memcpy(buffer, &request, sizeof(rpc_data));
     offset += sizeof(rpc_data);
 
-    // serialize the payload data2 into the buffer if it exists
+    // Serialize the payload data2 into the buffer if it exists
     if (request.data2_len > 0 && request.data2 != NULL) {
         memcpy(buffer + offset, request.data2, request.data2_len);
         offset += request.data2_len;
     }
 
-    // send the serialized data to the server
+    // Send the serialized data to the server
     if (send(cl->socket_fd, buffer, buffer_size, 0) == -1) {
         perror("send");
         return NULL;
     }
 
     int response_data1;
-    memset(&response_data1, 0, sizeof(int));
+    memset(&response_data1, 0,
+           sizeof(int)); // Reset the memory of response_data1
 
-    printf("\tresponse_data: %d\n", response_data1);
+    // printf("\tresponse_data: %d\n", response_data1);
 
     if (recv(cl->socket_fd, &response_data1, sizeof(int), 0) == -1) {
         perror("recv");
         return NULL;
     }
 
-    printf("\tresponse_data: %d\n", response_data1);
+    // printf("\tresponse_data: %d\n", response_data1);
 
-    // create and populate the response struct
+    // Create and populate the response struct
     rpc_data *response = malloc(sizeof(rpc_data));
     if (response == NULL) {
         perror("malloc");
@@ -478,7 +492,7 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     response->data2_len = 0;
     response->data2 = NULL;
 
-    printf("response in rpc_call: %d\n", response->data1);
+    // printf("response in rpc_call: %d\n", response->data1);
 
     return response;
 }
