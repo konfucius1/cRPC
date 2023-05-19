@@ -163,7 +163,7 @@ static int find_function_index(rpc_server *server, char *function_name) {
         }
     }
 
-    return -1; // Function not found
+    return -1;
 }
 
 static rpc_data *handle_lookup_request(rpc_server *srv, rpc_data *request,
@@ -188,12 +188,12 @@ static rpc_data *handle_lookup_request(rpc_server *srv, rpc_data *request,
         response->data1 = -1;
     }
 
-    // Serialize the response into a byte stream
+    // serialize the response into a byte stream
     size_t response_len = sizeof(int);
     char response_buffer[response_len];
     memcpy(response_buffer, &(response->data1), sizeof(int));
 
-    // Send the response byte stream
+    // send the response byte stream
     if (send(socket_fd, response_buffer, response_len, 0) == -1) {
         perror("send");
     }
@@ -222,16 +222,39 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
         return NULL;
     }
 
-    // Serialize the response into a byte stream
-    size_t response_len = sizeof(int);
-    char response_buffer[response_len];
-    memcpy(response_buffer, &(response->data1), sizeof(int));
+    // prepare the buffer for serialization
+    size_t buffer_size = sizeof(int) + sizeof(size_t) +
+                         (response->data2 ? response->data2_len : 0);
+    char *buffer = malloc(buffer_size);
+    if (!buffer) {
+        perror("malloc");
+        free(data2);
+        free(response);
+        return NULL;
+    }
+    size_t offset = 0;
 
-    // Send the response byte stream
-    if (send(socket_fd, response_buffer, response_len, 0) == -1) {
-        perror("send");
+    // serialize the response struct into the buffer
+    memcpy(buffer + offset, &(response->data1), sizeof(int));
+    offset += sizeof(int);
+    memcpy(buffer + offset, &(response->data2_len), sizeof(size_t));
+    offset += sizeof(size_t);
+
+    // if data2 is not NULL, copy it into the buffer as well
+    if (response->data2) {
+        memcpy(buffer + offset, response->data2, response->data2_len);
     }
 
+    // send the serialized data to the client
+    if (send(socket_fd, buffer, buffer_size, 0) == -1) {
+        perror("send");
+        free(data2);
+        free(response);
+        free(buffer);
+        return NULL;
+    }
+
+    free(buffer);
     free(data2);
     return response;
 }
@@ -434,15 +457,17 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
                         .data2 = payload->data2,
                         .data2_len = payload->data2_len};
 
-    // /* Print request_data */
-    // printf("Request Data: ");
-    // printf("data1: %d ", request.data1);
-    // printf("data2_len: %ld ", request.data2_len);
-    // if (request.data2 != NULL) {
-    //     printf("data2: %d\n", *((char *)request.data2));
-    // } else {
-    //     printf("data2: NULL\n");
-    // }
+    /* print request_data */
+    printf("Request Data: \n");
+    printf("data1: %d \n", request.data1);
+    printf("data2_len: %ld \n", request.data2_len);
+    if (request.data2 != NULL) {
+        printf("data2: %d\n", *((char *)request.data2));
+    } else {
+        printf("data2: NULL\n");
+    }
+
+    printf("------------------------\n");
 
     // prepare the buffer for serialization
     size_t buffer_size = sizeof(rpc_data) + request.data2_len;
@@ -465,11 +490,11 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
         return NULL;
     }
 
+    // recv
     int response_data1;
-    memset(&response_data1, 0,
-           sizeof(int)); // Reset the memory of response_data1
-
-    if (recv(cl->socket_fd, &response_data1, sizeof(int), 0) == -1) {
+    size_t response_data2_len;
+    if (recv(cl->socket_fd, &response_data1, sizeof(int), 0) == -1 ||
+        recv(cl->socket_fd, &response_data2_len, sizeof(size_t), 0) == -1) {
         perror("recv");
         return NULL;
     }
@@ -482,21 +507,52 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     }
 
     response->data1 = response_data1;
-    response->data2_len = payload->data2_len;
+    response->data2_len = response_data2_len;
+    response->data2 = NULL;
 
-    // allocate memory for data2 and copy the content from payload->data2
-    if (payload->data2_len > 0 && payload->data2 != NULL) {
-        response->data2 = malloc(payload->data2_len);
+    // read remaining bytes if data2_len non_null
+    if (response_data2_len > 0) {
+        response->data2 = malloc(response_data2_len);
         if (response->data2 == NULL) {
             perror("malloc");
             free(response);
             return NULL;
         }
-        memcpy(response->data2, payload->data2, payload->data2_len);
-    } else {
-        response->data2 = NULL;
+
+        if (recv(cl->socket_fd, response->data2, response_data2_len, 0) == -1) {
+            perror("recv");
+            free(response->data2);
+            free(response);
+            return NULL;
+        }
     }
-    // printf("response in rpc_call: %d\n", response->data1);
+
+    // response->data1 = response_data1;
+
+    // response->data2_len = payload->data2_len;
+
+    // // allocate memory for data2 and copy the content from payload->data2
+    // if (payload->data2_len > 0) {
+    //     response->data2 = malloc(payload->data2_len);
+    //     if (response->data2 == NULL) {
+    //         perror("malloc");
+    //         free(response);
+    //         return NULL;
+    //     }
+    //     memcpy(response->data2, payload->data2, payload->data2_len);
+    // } else {
+    //     response->data2 = NULL;
+    // }
+
+    // /* Print response_data */
+    // printf("\tresponse Data: \n");
+    // printf("\tdata1: %d \n", response->data1);
+    // printf("\tdata2_len: %ld \n", response->data2_len);
+    // if (response->data2 != NULL) {
+    //     printf("\tdata2: %d\n", *((char *)payload->data2));
+    // } else {
+    //     printf("\tdata2: NULL\n");
+    // }
 
     return response;
 }
