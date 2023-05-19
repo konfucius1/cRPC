@@ -33,6 +33,16 @@ struct rpc_server {
     int functions_count;          // number of registered functions
 };
 
+struct rpc_client {
+    char *server_address;
+    int socket_fd;
+    int port;
+};
+
+struct rpc_handle {
+    int index;
+};
+
 /**
  * Initialize the server by setting up a socket for the server and starts
  * listening for incoming connections
@@ -203,8 +213,7 @@ static rpc_data *handle_lookup_request(rpc_server *srv, rpc_data *request,
 }
 
 static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
-                                            int function_index, int socket_fd) {
-    rpc_handler *function = &(srv->functions[function_index].handler);
+                                            int socket_fd) {
     char *data2 = malloc(request->data2_len);
 
     if (recv(socket_fd, data2, request->data2_len, 0) == -1) {
@@ -215,6 +224,13 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
 
     request->data2 = data2;
 
+    int function_index;
+    if (recv(socket_fd, &function_index, sizeof(int), 0) == -1) {
+        perror("recv");
+        return NULL;
+    }
+
+    rpc_handler *function = &(srv->functions[function_index].handler);
     rpc_data *response = (*function)(request);
 
     if (response == NULL) {
@@ -326,8 +342,8 @@ void rpc_serve_all(rpc_server *srv) {
                 // printf("function_index: %d\n", response->data1);
             } else {
                 // printf("handle for function call request\n");
-                response = handle_function_invocation(
-                    srv, &request, function_index, srv->new_fd);
+                response =
+                    handle_function_invocation(srv, &request, srv->new_fd);
                 // printf("response: %d\n", response->data1);
             }
 
@@ -348,16 +364,6 @@ void rpc_serve_all(rpc_server *srv) {
         close(srv->new_fd);
     }
 }
-
-struct rpc_client {
-    char *server_address;
-    int socket_fd;
-    int port;
-};
-
-struct rpc_handle {
-    int index;
-};
 
 /**
  * Initialize the client by setting up address and port to make requests to
@@ -486,6 +492,12 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
 
     // send the serialized data to the server
     if (send(cl->socket_fd, buffer, buffer_size, 0) == -1) {
+        perror("send");
+        return NULL;
+    }
+
+    // send the function index to the server
+    if (send(cl->socket_fd, &(h->index), sizeof(int), 0) == -1) {
         perror("send");
         return NULL;
     }
