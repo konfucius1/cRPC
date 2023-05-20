@@ -215,6 +215,10 @@ static rpc_data *handle_lookup_request(rpc_server *srv, rpc_data *request,
 static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
                                             int socket_fd) {
     char *data2 = malloc(request->data2_len);
+    if (data2 == NULL) {
+        perror("malloc");
+        return NULL;
+    }
 
     if (recv(socket_fd, data2, request->data2_len, 0) == -1) {
         perror("recv");
@@ -236,13 +240,57 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
         return NULL;
     }
 
-    rpc_handler *function = &(srv->functions[function_index].handler);
-    rpc_data *response = (*function)(request);
+    // /* print request_data */
+    // printf("Request Data: \n");
+    // printf("data1: %d \n", request->data1);
+    // printf("data2_len: %ld \n", request->data2_len);
+    // if (request->data2 != NULL) {
+    //     printf("data2: %d\n", *((char *)request->data2));
+    // } else {
+    //     printf("data2: NULL\n");
+    // }
 
-    if (response == NULL) {
+    rpc_handler *function = &(srv->functions[function_index].handler);
+
+    // printf("Debug: Address of function pointer at index %d is %p\n",
+    //        function_index, &(srv->functions[function_index].handler));
+
+    // Check if function is NULL
+    if (function == NULL) {
         free(data2);
         return NULL;
     }
+
+    rpc_data *response = (*function)(request);
+
+    rpc_data error_response;
+    if ((response == NULL) ||
+        (response->data2 == NULL && response->data2_len > 0) ||
+        (response->data2 != NULL && response->data2_len == 0)) {
+        error_response.data1 = -9999;
+        error_response.data2 = strdup("Function failed");
+        error_response.data2_len = strlen(error_response.data2) + 1;
+        response = &error_response;
+    }
+
+    // // rpc_data inconcistency
+    // if (response->data2 == NULL && response->data2_len > 0) {
+    //     printf("inconsistency issue\n");
+    // }
+
+    // if (response->data2 != NULL && response->data2_len == 0) {
+    //     printf("data2 not null but data2_len 0\n");
+    // }
+
+    // // Debugging output
+    // printf("Debug: error_response contents:\n");
+    // printf("response->data1: %d\n", response->data1);
+    // printf("response->data2_len: %zu\n", response->data2_len);
+    // if (response->data2 != NULL) {
+    //     printf("data2: %s\n", (char *)response->data2);
+    // } else {
+    //     printf("data2: NULL\n");
+    // }
 
     // prepare the buffer for serialization
     size_t buffer_size = sizeof(int) + sizeof(size_t) +
@@ -254,6 +302,7 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
         free(response);
         return NULL;
     }
+
     size_t offset = 0;
 
     // serialize the response struct into the buffer
@@ -273,12 +322,22 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
         free(data2);
         free(response);
         free(buffer);
+
+        if (response != &error_response) {
+            free(response);
+        }
+
         return NULL;
     }
 
     free(buffer);
     free(data2);
-    return response;
+
+    if (response == &error_response) {
+        return NULL;
+    } else {
+        return response;
+    };
 }
 
 /**
@@ -569,15 +628,19 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     //     response->data2 = NULL;
     // }
 
-    // /* Print response_data */
-    // printf("\tresponse Data: \n");
-    // printf("\tdata1: %d \n", response->data1);
-    // printf("\tdata2_len: %ld \n", response->data2_len);
-    // if (response->data2 != NULL) {
-    //     printf("\tdata2: %d\n", *((char *)payload->data2));
-    // } else {
-    //     printf("\tdata2: NULL\n");
-    // }
+    // // Debugging output
+    // printf("Debug: error_response contents:\n");
+    // printf("response->data1: %d\n", response->data1);
+    // printf("response->data2_len: %zu\n", response->data2_len);
+
+    if (strcmp((char *)response->data2, "Function failed") == 0) {
+        return NULL;
+    }
+
+    // check function return data2 and data2_len consistency
+    if (response->data2 == NULL && response->data2_len > 0) {
+        return NULL;
+    }
 
     return response;
 }
