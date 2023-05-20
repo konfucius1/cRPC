@@ -283,14 +283,14 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
     // }
 
     // // Debugging output
-    // printf("Debug: error_response contents:\n");
-    // printf("response->data1: %d\n", response->data1);
-    // printf("response->data2_len: %zu\n", response->data2_len);
-    // if (response->data2 != NULL) {
-    //     printf("data2: %s\n", (char *)response->data2);
-    // } else {
-    //     printf("data2: NULL\n");
-    // }
+    printf("Debug: error_response contents:\n");
+    printf("response->data1: %d\n", response->data1);
+    printf("response->data2_len: %zu\n", response->data2_len);
+    if (response->data2 != NULL) {
+        printf("data2: %s\n", (char *)response->data2);
+    } else {
+        printf("data2: NULL\n");
+    }
 
     // prepare the buffer for serialization
     size_t buffer_size = sizeof(int) + sizeof(size_t) +
@@ -629,18 +629,20 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     // }
 
     // // Debugging output
-    // printf("Debug: error_response contents:\n");
-    // printf("response->data1: %d\n", response->data1);
-    // printf("response->data2_len: %zu\n", response->data2_len);
+    printf("Debug: error_response contents:\n");
+    printf("response->data1: %d\n", response->data1);
+    printf("response->data2_len: %zu\n", response->data2_len);
 
-    if (strcmp((char *)response->data2, "Function failed") == 0) {
-        return NULL;
+    if (response->data2 != NULL) {
+        if (strcmp((char *)response->data2, "Function failed") == 0) {
+            return NULL;
+        }
     }
 
-    // check function return data2 and data2_len consistency
-    if (response->data2 == NULL && response->data2_len > 0) {
-        return NULL;
-    }
+    // // check function return data2 and data2_len consistency
+    // if (response->data2 == NULL && response->data2_len > 0) {
+    //     return NULL;
+    // }
 
     return response;
 }
