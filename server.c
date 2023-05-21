@@ -2,13 +2,28 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 rpc_data *add2_i8(rpc_data *);
 
 int main(int argc, char *argv[]) {
+    int port = 3000;
+    int opt;
+
+    while ((opt = getopt(argc, argv, "p:")) != -1) {
+        switch (opt) {
+        case 'p':
+            port = atoi(optarg);
+            break;
+        default:
+            fprintf(stderr, "Usage: %s -p <port>\n", argv[0]);
+            exit(EXIT_FAILURE);
+        }
+    }
+
     rpc_server *state;
 
-    state = rpc_init_server(3000);
+    state = rpc_init_server(port);
     if (state == NULL) {
         fprintf(stderr, "Failed to init\n");
         exit(EXIT_FAILURE);
