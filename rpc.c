@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
 
 #include "rpc.h"
 #include <arpa/inet.h>
@@ -282,7 +283,7 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
     //     printf("data2 not null but data2_len 0\n");
     // }
 
-    // // // Debugging output
+    // // Debugging output
     // printf("Debug: error_response contents:\n");
     // printf("response->data1: %d\n", response->data1);
     // printf("response->data2_len: %zu\n", response->data2_len);
@@ -293,7 +294,7 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
     // }
 
     // prepare the buffer for serialization
-    size_t buffer_size = sizeof(int) + sizeof(size_t) +
+    size_t buffer_size = sizeof(uint64_t) + sizeof(size_t) +
                          (response->data2 ? response->data2_len : 0);
     char *buffer = malloc(buffer_size);
     if (!buffer) {
@@ -306,10 +307,23 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
     size_t offset = 0;
 
     // serialize the response struct into the buffer
-    memcpy(buffer + offset, &(response->data1), sizeof(int));
-    offset += sizeof(int);
-    memcpy(buffer + offset, &(response->data2_len), sizeof(size_t));
-    offset += sizeof(size_t);
+    uint64_t data1_network = htobe64(response->data1);
+    memcpy(buffer + offset, &data1_network, sizeof(uint64_t));
+    offset += sizeof(uint64_t);
+
+    uint32_t data2_len_network = htonl(response->data2_len);
+    memcpy(buffer + offset, &data2_len_network, sizeof(uint32_t));
+    offset += sizeof(uint32_t);
+
+    // // Debugging output
+    // printf("Debug: error_response contents:\n");
+    // printf("data1_network: %ld\n", data1_network);
+    // printf("data2_len_network: %d\n", data2_len_network);
+    // if (response->data2 != NULL) {
+    //     printf("data2: %s\n", (char *)response->data2);
+    // } else {
+    //     printf("data2: NULL\n");
+    // }
 
     // if data2 is not NULL, copy it into the buffer as well
     if (response->data2) {
@@ -489,11 +503,16 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
     // Prepare the payload byte stream
     size_t payload_len = sizeof(rpc_data) + strlen(name);
     char payload[payload_len];
+    size_t offset = 0;
+
     memcpy(payload, &request, sizeof(rpc_data));
+    offset += sizeof(rpc_data);
+
     memcpy(payload + sizeof(rpc_data), name, strlen(name));
+    offset += strlen(name);
 
     // Send the payload
-    if (send(cl->socket_fd, payload, payload_len, 0) == -1) {
+    if (send(cl->socket_fd, payload, offset, 0) == -1) {
         perror("send");
         return NULL;
     }
@@ -535,18 +554,6 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
                         .data2 = payload->data2,
                         .data2_len = payload->data2_len};
 
-    // /* print request_data */
-    // printf("Request Data: \n");
-    // printf("data1: %d \n", request.data1);
-    // printf("data2_len: %ld \n", request.data2_len);
-    // if (request.data2 != NULL) {
-    //     printf("data2: %d\n", *((char *)request.data2));
-    // } else {
-    //     printf("data2: NULL\n");
-    // }
-
-    // printf("------------------------\n");
-
     // prepare the buffer for serialization
     size_t buffer_size = sizeof(rpc_data) + request.data2_len;
     char buffer[buffer_size];
@@ -574,75 +581,65 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
         return NULL;
     }
 
-    // recv
-    int response_data1;
-    size_t response_data2_len;
-    if (recv(cl->socket_fd, &response_data1, sizeof(int), 0) == -1 ||
-        recv(cl->socket_fd, &response_data2_len, sizeof(size_t), 0) == -1) {
+    // Buffer to hold received data
+    unsigned char response_buffer[1024];
+
+    // Receive the serialized data from the server
+    ssize_t bytes_received =
+        recv(cl->socket_fd, response_buffer, sizeof(response_buffer), 0);
+    if (bytes_received == -1) {
         perror("recv");
         return NULL;
     }
 
-    // create and populate the response struct
+    // Initialize buffer offset to 0
+    size_t buffer_offset = 0;
+
+    // Create and populate the response struct
     rpc_data *response = malloc(sizeof(rpc_data));
     if (response == NULL) {
         perror("malloc");
         return NULL;
     }
 
-    response->data1 = response_data1;
-    response->data2_len = response_data2_len;
-    response->data2 = NULL;
+    // De-serialize data1 from response_buffer
+    uint64_t data1_network;
+    memcpy(&data1_network, response_buffer + buffer_offset, sizeof(uint64_t));
+    response->data1 = be64toh(data1_network);
+    buffer_offset += sizeof(uint64_t);
 
-    // read remaining bytes if data2_len non_null
-    if (response_data2_len > 0) {
-        response->data2 = malloc(response_data2_len);
+    // De-serialize data2_len from response_buffer
+    uint32_t data2_len_network;
+    memcpy(&data2_len_network, response_buffer + buffer_offset,
+           sizeof(uint32_t));
+    response->data2_len = ntohl(data2_len_network);
+    buffer_offset += sizeof(uint32_t);
+
+    // Read remaining bytes if data2_len non_null
+    if (response->data2_len > 0) {
+        response->data2 =
+            malloc(response->data2_len + 1); // add 1 for null terminator
         if (response->data2 == NULL) {
             perror("malloc");
             free(response);
             return NULL;
         }
+        // De-serialize data2 from response_buffer
+        memcpy(response->data2, response_buffer + buffer_offset,
+               response->data2_len);
+        ((char *)response->data2)[response->data2_len] =
+            '\0'; // null terminator
+    } else {
+        response->data2 = NULL;
+    }
 
-        if (recv(cl->socket_fd, response->data2, response_data2_len, 0) == -1) {
-            perror("recv");
+    if (response->data2 != NULL) {
+        if (strcmp((char *)response->data2, "Function failed") == 0) {
             free(response->data2);
             free(response);
             return NULL;
         }
     }
-
-    // response->data1 = response_data1;
-
-    // response->data2_len = payload->data2_len;
-
-    // // allocate memory for data2 and copy the content from payload->data2
-    // if (payload->data2_len > 0) {
-    //     response->data2 = malloc(payload->data2_len);
-    //     if (response->data2 == NULL) {
-    //         perror("malloc");
-    //         free(response);
-    //         return NULL;
-    //     }
-    //     memcpy(response->data2, payload->data2, payload->data2_len);
-    // } else {
-    //     response->data2 = NULL;
-    // }
-
-    // // Debugging output
-    // printf("Debug: error_response contents:\n");
-    // printf("response->data1: %d\n", response->data1);
-    // printf("response->data2_len: %zu\n", response->data2_len);
-
-    if (response->data2 != NULL) {
-        if (strcmp((char *)response->data2, "Function failed") == 0) {
-            return NULL;
-        }
-    }
-
-    // // check function return data2 and data2_len consistency
-    // if (response->data2 == NULL && response->data2_len > 0) {
-    //     return NULL;
-    // }
 
     return response;
 }
