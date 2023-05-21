@@ -169,7 +169,7 @@ static int find_function_index(rpc_server *server, char *function_name) {
 
     for (int i = 0; i < server->functions_count; i++) {
         if (strcmp(functions[i].name, function_name) == 0) {
-            // printf("function found at index: %d\n", i);
+            // printf("function %s found at index: %d\n", function_name, i);
             return i;
         }
     }
@@ -177,60 +177,57 @@ static int find_function_index(rpc_server *server, char *function_name) {
     return -1;
 }
 
-static rpc_data *handle_lookup_request(rpc_server *srv, rpc_data *request,
-                                       int socket_fd) {
+static void handle_lookup_request(rpc_server *srv, rpc_data *request,
+                                  int socket_fd) {
 
-    /* printf("SERVE_ALL Data received after DSR.\n");
-    printf("data1: %d\n", request->data1);
-    printf("data2_len: %zu\n", request->data2_len);
-    if (request->data2 != NULL) {
-        printf("data2: %s\n", (char *)request->data2);
-    } else {
-        printf("data2: NULL\n");
-    } */
-
-    rpc_data *response = malloc(sizeof(rpc_data));
+    // printf("SERVE_ALL Data received after DSR.\n");
+    // printf("data1: %d\n", request->data1);
+    // printf("data2_len: %zu\n", request->data2_len);
+    // if (request->data2 != NULL) {
+    //     printf("data2: %s\n", (char *)request->data2);
+    // } else {
+    //     printf("data2: NULL\n");
+    // }
 
     char *function_name = malloc(request->data1 + 1);
-    // printf("Waiting for function_name\n");
+    // printf("Waiting for function\n");
     if (recv(socket_fd, function_name, request->data1, 0) == -1) {
         perror("recv");
         free(function_name);
-        free(response);
-        return NULL;
     }
-    // printf("Received function_name\n");
-
     function_name[request->data1] = '\0';
+    // printf("Received function: %s\n", function_name);
 
     int function_index = find_function_index(srv, function_name);
+    uint64_t data_function_index;
 
     if (function_index != -1) {
-        response->data1 = htobe64((uint64_t)function_index);
+        data_function_index = htobe64((uint64_t)function_index);
+        // printf("\tfunction_index from handle_lookup: %ld\n",
+        //        (uint64_t)function_index);
+
     } else {
-        response->data1 = htobe64((uint64_t)-1);
+        data_function_index = htobe64((uint64_t)-1);
     }
 
-    // serialize the response into a byte stream
-    size_t response_len = sizeof(int);
-    char response_buffer[response_len];
-    memcpy(response_buffer, &(response->data1), sizeof(int));
+    // printf("\tfunction_index from handle_lookup: %d\n", function_index);
+    // printf("\tfunction_index from handle_lookup: %ld\n",
+    //        (uint64_t)response->data1);
 
-    // send the response byte stream
-    if (send(socket_fd, response_buffer, response_len, 0) == -1) {
+    // printf("\tfunction_index from handle_lookup: %ld\n",
+    // data_function_index); send the response directly
+    if (send(socket_fd, &data_function_index, sizeof(uint64_t), 0) == -1) {
         perror("send");
     }
 
     free(function_name);
-    return response;
 }
 
-static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
-                                            int socket_fd) {
+static void handle_function_invocation(rpc_server *srv, rpc_data *request,
+                                       int socket_fd) {
     char *data2 = malloc(request->data2_len);
     if (data2 == NULL) {
         perror("malloc");
-        return NULL;
     }
 
     // /* print request_data */
@@ -246,43 +243,41 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
     if (recv(socket_fd, data2, request->data2_len, 0) == -1) {
         perror("recv");
         free(data2);
-        return NULL;
     }
 
     request->data2 = data2;
 
     // receive function_index
-    int function_index;
-    if (recv(socket_fd, &function_index, sizeof(int), 0) == -1) {
+    uint64_t function_index;
+    if (recv(socket_fd, &function_index, sizeof(uint64_t), 0) == -1) {
         perror("recv");
-        return NULL;
     }
 
     // check if function_index is valid
     if (function_index < 0 || function_index >= srv->functions_count) {
         perror("index");
-        return NULL;
     }
+
+    // printf("function_index received: %ld\n", function_index);
 
     // /* print request_data */
     // printf("***Request Data: \n");
     // printf("data1: %d \n", request->data1);
     // printf("data2_len: %ld \n", request->data2_len);
     // if (request->data2 != NULL) {
-    //     printf("data2: %d\n", *((char *)request->data2));
+    // printf("data2: %d\n", *((char *)request->data2));
     // } else {
-    //     printf("data2: NULL\n");
+    // printf("data2: NULL\n");
     // }
 
     rpc_handler *function = &(srv->functions[function_index].handler);
 
-    // printf("Debug: Address of function pointer at index %d is %p\n",
+    // printf("Debug: Address of function pointer at index %ld is %p\n",
     //        function_index, &(srv->functions[function_index].handler));
 
     // Check if function is NULL
     if (function == NULL) {
         free(data2);
-        return NULL;
     }
 
     rpc_data *response = (*function)(request);
@@ -324,7 +319,6 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
         perror("malloc");
         free(data2);
         free(response);
-        return NULL;
     }
 
     size_t offset = 0;
@@ -363,18 +357,10 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
         if (response != &error_response) {
             free(response);
         }
-
-        return NULL;
     }
 
     free(buffer);
     free(data2);
-
-    if (response == &error_response) {
-        return NULL;
-    } else {
-        return response;
-    };
 }
 
 /**
@@ -408,10 +394,7 @@ void rpc_serve_all(rpc_server *srv) {
         inet_ntop(their_addr.ss_family,
                   get_in_addr((struct sockaddr *)&their_addr), s, sizeof(s));
 
-        int function_index = 0;
         while (1) {
-            rpc_data *response = NULL;
-
             // printf("Waiting for data...\n");
 
             // Receive request byte stream
@@ -439,7 +422,7 @@ void rpc_serve_all(rpc_server *srv) {
                    sizeof(data2_len_net));
             offset += sizeof(data2_len_net);
 
-            // printf("SERVE_ALL Data received before DSR.\n");
+            // printf("SERVE_ALL Data received.\n");
             // printf("data1: %d\n", request.data1);
             // printf("data2_len: %zu\n", request.data2_len);
             // if (request.data2 != NULL) {
@@ -448,18 +431,19 @@ void rpc_serve_all(rpc_server *srv) {
             //     printf("data2: NULL\n");
             // }
 
+            // printf("\n");
+
             request.data1 = be64toh(data1_net);
             request.data2_len = ntohl(data2_len_net);
 
             if (request.data2_len == 0) {
                 // printf("handle for lookup request\n");
-                response = handle_lookup_request(srv, &request, srv->new_fd);
-                function_index = response->data1;
+                handle_lookup_request(srv, &request, srv->new_fd);
                 // printf("function_index: %d\n", response->data1);
             } else {
                 // printf("handle for function call request\n");
-                response =
-                    handle_function_invocation(srv, &request, srv->new_fd);
+
+                handle_function_invocation(srv, &request, srv->new_fd);
                 // printf("response: %d\n", response->data1);
             }
 
@@ -555,6 +539,8 @@ static char *serialize_payload(rpc_data *request) {
 }
 
 rpc_handle *rpc_find(rpc_client *cl, char *name) {
+    // printf("\tCALLING RPC_FIND for function: %s\n", name);
+
     if (cl == NULL || name == NULL) {
         return NULL;
     }
@@ -602,25 +588,44 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
 
     free(payload);
 
-    rpc_data response;
-    if (recv(cl->socket_fd, &response, sizeof(rpc_data), 0) == -1) {
+    // rpc_data response;
+    // if (recv(cl->socket_fd, &response, sizeof(rpc_data), 0) == -1) {
+    //     perror("recv");
+    //     return NULL;
+    // }
+
+    // printf("response.data1 before: %d\n", response.data1);
+    // response.data1 = be64toh(response.data1);
+    // printf("response.data1 after: %d\n", response.data1);
+
+    // Prepare a variable to hold the received data
+    uint64_t received_data;
+
+    // Receive the data
+    if (recv(cl->socket_fd, &received_data, sizeof(uint64_t), 0) == -1) {
         perror("recv");
         return NULL;
     }
 
-    response.data1 = ntohl(response.data1);
+    // The data received is in network byte order (big endian), so convert it to
+    // host byte order
+    received_data = be64toh(received_data);
+
+    // printf("Received function_index: %ld\n", received_data);
 
     uint64_t invalid_response = (uint64_t)-1;
-    if (response.data1 == invalid_response) {
+    if (received_data == invalid_response) {
         return NULL;
     }
+
     rpc_handle *function_handle = (rpc_handle *)malloc(sizeof(rpc_handle));
     if (!function_handle) {
         perror("malloc");
         return NULL;
     }
 
-    function_handle->index = response.data1;
+    function_handle->index = received_data;
+    // printf("\tfunction_handle->index: %d\n", function_handle->index);
     return function_handle;
 }
 
@@ -629,10 +634,10 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
         return NULL;
     }
 
-    // printf("RPC_CALL: PAYLOAD TO SEND\n");
-    // printf("data1: %d \n", payload->data1);
-    // printf("data2_len: %ld \n", payload->data2_len);
-    // if (payload->data2 != NULL) {
+    // printf("=====================================RPC_CALL: PAYLOAD TO
+    // SEND\n"); printf("data1: %d \n", payload->data1); printf("data2_len: %ld
+    // \n", payload->data2_len); printf("***function_index: %d\n", h->index); if
+    // (payload->data2 != NULL) {
     //     printf("data2: %d\n", *((char *)payload->data2));
     // } else {
     //     printf("data2: NULL\n");

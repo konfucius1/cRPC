@@ -1,17 +1,26 @@
-CC=cc
-RPC_SYSTEM=rpc.o
+CC = gcc
+CFLAGS = -Wall 
+LDFLAGS = -lrt
 
-.PHONY: format all
+SRC = server.c rpc.c
+SRC2 = client.c rpc.c
 
-all: $(RPC_SYSTEM)
+OBJ = $(SRC:.c=.o)
+OBJ2 = $(SRC2:.c=.o)
 
-$(RPC_SYSTEM): rpc.c rpc.h
-	$(CC) -c -o $@ $<
-	
+EXE = rpc-server
+EXE2 = rpc-client 
 
-# RPC_SYSTEM_A=rpc.a
-# $(RPC_SYSTEM_A): rpc.o
-# 	ar rcs $(RPC_SYSTEM_A) $(RPC_SYSTEM)
+all: $(EXE) $(EXE2)
 
-format:
-	clang-format -style=file -i *.c *.h
+$(EXE): $(OBJ)
+	$(CC) $(CFLAGS) $(SRC) -o $(EXE) $(LDFLAGS)
+
+$(EXE2): $(OBJ2)
+	$(CC) $(CFLAGS) $(SRC2) -o $(EXE2) $(LDFLAGS)
+
+rpc.o: rpc.c rpc.h
+
+clean:
+	rm -f $(OBJ) $(EXE)
+	rm -f $(OBJ2) $(EXE2)
