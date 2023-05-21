@@ -1,17 +1,44 @@
 Thanakon Kimsan, tkimsan , 1208848
 
 1. Should the server accept calls from everyone, or just a subset of users?
-Depending on the privacy and security requirement, the server can accept calls from anyone. However, if there data is strictly private or used within in organizations, there should be permission and security protocols set in place. 
+
+    Depending on the privacy and security requirements, the server can accept calls from anyone. However, if there is private data or functions involved, permission and security protocols should be set in place.
 
 2. Should authentication etc. be provided by the RPC framework, or by the functions that use the RPC frame-work?
 
+    Authentication should ideally be provided by the RPC framework, as it ensures consistent security across all functions and reduces code redundancy with a centralized authentication mechanism in the framework.
+
 3. What transport layer protocol should be used? What are the trade-offs?
-TCP is suitable as it is connection oriented, well suited for RPC where data should be reliable and in-order delivery. The tradeoff over UDP however, would be cost of the speed.
+
+    TCP is suitable as it is connection-oriented and well-suited for RPC, where data should be delivered reliably and in order. The trade-off with TCP over UDP, however, is speed, as the TCP protocol has bandwidth delay.
 
 4. In which function(s) should the socket(s) be created?
-`rpc_init_server` and `rpc_init_client`
+
+    Sockets should be created in the rpc_init_server and rpc_init_client functions, as it encapsulates all the networking setup and initialization in one place. This allows the code to be more manageable in terms of error handling and enables the creation of multiple clients connecting to one server.
 
 5. Should rpc_client and rpc_server be allocated dynamically or statically? What are the implications for the client and server code?
-It is generally better practice to dynamically allocate memory so that resources are created and destroyed at runtime to better handle demands of client server calls rather than having wasted memory allocated statically. 
+
+    In the context of RPC, dynamic allocation offers greater flexibility since the number of clients and servers can vary. Therefore, resources are created and destroyed at runtime to better handle the demands of remote calls.
 
 6. What happens if one host uses big-endian byte order and the other uses little-endian? How does that relate to “network byte order”?
+
+    Difference in endian byte order on different host would lead to differing multibyte data which could lead to communication errors. Network byte order, which is big-endian, enables consistent and accurate data interpretation on different hosts. 
+
++--------------------------+
+| RPC Protocol Description |
++--------------------------+
++----------+
+| Overview |
++----------+
+- Client initiates a socket connection with the server.
+- Client uses an RPC function that makes a call to the server.
+- The client serializes and sends the arguments of the server functions into a payload over the connection.
+- The server receives the payload and deserializes to obtain the arguments and finds the target function passing in the arguments.
+- Server obtains results of the procedure and serializes into response payload sending the message back to the client.
+- The client receives and deserializes the payload and obtains the result of the remote procedure call.
++--------------------+
+| Encoding Procedure |
++--------------------+
+This system uses a fixed size field encoding mainly due to the fact that the maximum size of a data block is estimated and fixed. The process of decoding is but simpler as well with the use of network byte order functions like `be64toh()` and `htonl()`. 
+
+In the rpc_data structure: 64-bit field is used to encode/decode `data1` type `int` as it can accomodate larger integer values. 32-bit field is used for `data2_len` type `size_t` as it varies by physical hosts, making it compatible for both 32-bit and 64-bit machines. 
