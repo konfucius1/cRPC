@@ -247,11 +247,17 @@ static void handle_function_invocation(rpc_server *srv, rpc_data *request,
 
     request->data2 = data2;
 
+    // receive function index in network byte order
+    u_int64_t function_index_network_order;
+
     // receive function_index
-    uint64_t function_index;
-    if (recv(socket_fd, &function_index, sizeof(uint64_t), 0) == -1) {
+    if (recv(socket_fd, &function_index_network_order, sizeof(u_int64_t), 0) ==
+        -1) {
         perror("recv");
     }
+
+    // convert network byte to host byte
+    int function_index = (int)ntohl(function_index_network_order);
 
     // check if function_index is valid
     if (function_index < 0 || function_index >= srv->functions_count) {
@@ -260,19 +266,19 @@ static void handle_function_invocation(rpc_server *srv, rpc_data *request,
 
     // printf("function_index received: %ld\n", function_index);
 
-    // /* print request_data */
+    // print request_data
     // printf("***Request Data: \n");
     // printf("data1: %d \n", request->data1);
     // printf("data2_len: %ld \n", request->data2_len);
     // if (request->data2 != NULL) {
-    // printf("data2: %d\n", *((char *)request->data2));
+    //     printf("data2: %d\n", *((char *)request->data2));
     // } else {
-    // printf("data2: NULL\n");
+    //     printf("data2: NULL\n");
     // }
 
     rpc_handler *function = &(srv->functions[function_index].handler);
 
-    // printf("Debug: Address of function pointer at index %ld is %p\n",
+    // printf("Debug: Address of function pointer at index %d is %p\n",
     //        function_index, &(srv->functions[function_index].handler));
 
     // Check if function is NULL
@@ -286,7 +292,7 @@ static void handle_function_invocation(rpc_server *srv, rpc_data *request,
     if ((response == NULL) ||
         (response->data2 == NULL && response->data2_len > 0) ||
         (response->data2 != NULL && response->data2_len == 0)) {
-        error_response.data1 = -9999;
+        error_response.data1 = -1;
         error_response.data2 = strdup("Function failed");
         error_response.data2_len = strlen(error_response.data2) + 1;
         response = &error_response;
@@ -302,7 +308,7 @@ static void handle_function_invocation(rpc_server *srv, rpc_data *request,
     // }
 
     // // Debugging output
-    // printf("Debug: error_response contents:\n");
+    // printf("Debug: errro_response contents:\n");
     // printf("response->data1: %d\n", response->data1);
     // printf("response->data2_len: %zu\n", response->data2_len);
     // if (response->data2 != NULL) {
@@ -685,8 +691,11 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
         }
     }
 
+    // convert index to network byte order and send to the server
+    u_int64_t index_network_order = htonl((uint64_t)h->index);
+
     // send the function index to the server
-    if (send(cl->socket_fd, &(h->index), sizeof(int), 0) == -1) {
+    if (send(cl->socket_fd, &index_network_order, sizeof(uint32_t), 0) == -1) {
         perror("send");
         return NULL;
     }
