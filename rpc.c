@@ -20,6 +20,9 @@
 #define BUFFER_SIZE 2048
 #define MAX_FUNCTIONS 10
 #define NOT_FOUND -1
+#define ERROR -1
+#define SUCCESS 0
+#define REQUEST_LEN sizeof(rpc_data)
 
 typedef struct registered_function {
     char *name;          // name of the remote procedure
@@ -166,7 +169,7 @@ static void *get_in_addr(struct sockaddr *sa) {
 
 /**
  * Finds the index of a registered function in a given RPC server by comparing
- * its name to a given function name.
+ * its name to a given function name
  */
 static int find_function_index(rpc_server *server, char *function_name) {
     registered_function *functions = server->functions;
@@ -180,95 +183,73 @@ static int find_function_index(rpc_server *server, char *function_name) {
     return NOT_FOUND;
 }
 
+// /* Sends the data to the client */
+// static void send_data_to_client(int socket_fd, void *data, size_t data_size)
+// {
+//     if (send(socket_fd, data, data_size, 0) == -1) {
+//         perror("send");
+//     }
+// }
+
+/* Helper function to send a payload through a socket */
+static int send_payload(int socket_fd, void *payload, size_t payload_len) {
+    if (send(socket_fd, payload, payload_len, 0) == -1) {
+        perror("send");
+        return ERROR;
+    }
+    return SUCCESS;
+}
+
 /**
  * Handles a lookup request by receiving a function name, finding its
- * index, and sending the index back to the client.
+ * index, and sending the index back to the client
  */
 static void handle_lookup_request(rpc_server *srv, rpc_data *request,
                                   int socket_fd) {
     char *function_name = malloc(request->data1 + 1);
+    if (function_name == NULL) {
+        perror("malloc");
+        return;
+    }
 
+    // receive function name from client
     if (recv(socket_fd, function_name, request->data1, 0) == -1) {
         perror("recv");
         free(function_name);
     }
-    function_name[request->data1] = '\0';
+
+    function_name[request->data1] = '\0'; // null-terminate string
 
     int function_index = find_function_index(srv, function_name);
+
+    // prepare response to client
     uint64_t data_function_index;
 
+    // send the index if found, otherwise -1 code
     if (function_index != NOT_FOUND) {
         data_function_index = htobe64((uint64_t)function_index);
     } else {
         data_function_index = htobe64((uint64_t)-1);
     }
 
-    // send the function index directly
-    if (send(socket_fd, &data_function_index, sizeof(uint64_t), 0) == -1) {
-        perror("send");
+    // send the response to the client
+    int send = send_payload(socket_fd, &data_function_index, sizeof(uint64_t));
+    if (send == ERROR) {
+        return;
     }
 
     free(function_name);
 }
 
-static void handle_function_invocation(rpc_server *srv, rpc_data *request,
-                                       int socket_fd) {
-    char *data2 = malloc(request->data2_len);
-    if (data2 == NULL) {
-        perror("malloc");
-    }
-
-    if (recv(socket_fd, data2, request->data2_len, 0) == -1) {
-        perror("recv");
-        free(data2);
-    }
-
-    request->data2 = data2;
-
-    // receive function index in network byte order
-    u_int64_t function_index_network_order;
-
-    // receive function_index
-    if (recv(socket_fd, &function_index_network_order, sizeof(u_int64_t), 0) ==
-        -1) {
-        perror("recv");
-    }
-
-    // convert network byte to host byte
-    int function_index = (int)ntohl(function_index_network_order);
-
-    // check if function_index is valid
-    if (function_index < 0 || function_index >= srv->functions_count) {
-        perror("index");
-    }
-
-    rpc_handler *function = &(srv->functions[function_index].handler);
-
-    // Check if function is NULL
-    if (function == NULL) {
-        free(data2);
-    }
-
-    rpc_data *response = (*function)(request);
-
-    rpc_data error_response;
-    if ((response == NULL) ||
-        (response->data2 == NULL && response->data2_len > 0) ||
-        (response->data2 != NULL && response->data2_len == 0)) {
-        error_response.data1 = -1;
-        error_response.data2 = strdup("Function failed");
-        error_response.data2_len = strlen(error_response.data2) + 1;
-        response = &error_response;
-    }
-
+/* Serializes and sends data to the client */
+static void send_serialized_data_to_client(int socket_fd, rpc_data *response) {
     // prepare the buffer for serialization
     size_t buffer_size = sizeof(uint64_t) + sizeof(size_t) +
                          (response->data2 ? response->data2_len : 0);
     char *buffer = malloc(buffer_size);
     if (!buffer) {
         perror("malloc");
-        free(data2);
-        free(response);
+        return;
     }
 
     size_t offset = 0;
@@ -290,21 +271,116 @@ static void handle_function_invocation(rpc_server *srv, rpc_data *request,
     // send the serialized data to the client
     if (send(socket_fd, buffer, buffer_size, 0) == -1) {
         perror("send");
-        free(data2);
-        free(response);
-        free(buffer);
-
-        if (response != &error_response) {
-            free(response);
-        }
     }
 
     free(buffer);
+}
+
+/* Receives and validates function index from the client */
+static int receive_and_validate_index(int socket_fd, int *function_index) {
+    u_int64_t function_index_network_order;
+    if (recv(socket_fd, &function_index_network_order, sizeof(u_int64_t), 0) ==
+        -1) {
+        perror("recv");
+        return ERROR;
+    }
+
+    *function_index = (int)ntohl(function_index_network_order);
+
+    if (*function_index < 0) {
+        perror("index");
+        return ERROR;
+    }
+
+    return SUCCESS;
+}
+
+/* Handles a function invocation request from the client */
+static void handle_function_invocation(rpc_server *srv, rpc_data *request,
+                                       int socket_fd) {
+    // allocate memory for the received data
+    char *data2 = malloc(request->data2_len);
+    if (data2 == NULL) {
+        perror("malloc");
+        return;
+    }
+
+    // receive the data from the client
+    if (recv(socket_fd, data2, request->data2_len, 0) == -1) {
+        perror("recv");
+        free(data2);
+        return;
+    }
+
+    request->data2 = data2;
+
+    // receive and validate function index
+    int function_index;
+    if (receive_and_validate_index(socket_fd, &function_index) == ERROR) {
+        free(data2);
+        return;
+    }
+
+    // check if function_index is valid
+    if (function_index >= srv->functions_count) {
+        perror("index");
+        free(data2);
+        return;
+    }
+
+    // execute function
+    rpc_handler *function = &(srv->functions[function_index].handler);
+    if (function == NULL) {
+        free(data2);
+        return;
+    }
+
+    rpc_data *response = (*function)(request);
+
+    rpc_data error_response;
+    if ((response == NULL) ||
+        (response->data2 == NULL && response->data2_len > 0) ||
+        (response->data2 != NULL && response->data2_len == 0)) {
+        error_response.data1 = ERROR;
+        error_response.data2 = strdup("Function failed");
+        error_response.data2_len = strlen(error_response.data2) + 1;
+        response = &error_response;
+    }
+
+    // send serialized data to the client
+    send_serialized_data_to_client(socket_fd, response);
+
     free(data2);
 }
 
+/* Helper function to handle incoming connections */
+static int accept_connection(rpc_server *srv,
+                             struct sockaddr_storage *their_addr,
+                             socklen_t addr_size) {
+    int fd = accept(srv->socket_fd, (struct sockaddr *)their_addr, &addr_size);
+
+    if (fd == -1) {
+        perror("accept");
+    }
+
+    return fd;
+}
+
+/* Helper function to deserialize data */
+static void deserialize_data(char *request_buffer, rpc_data *request) {
+    uint64_t data1_net;
+    uint32_t data2_len_net;
+
+    memcpy(&data1_net, request_buffer, sizeof(data1_net));
+    request->data1 = be64toh(data1_net);
+
+    memcpy(&data2_len_net, request_buffer + sizeof(data1_net),
+           sizeof(data2_len_net));
+    request->data2_len = ntohl(data2_len_net);
+}
+
 /**
- * function runs on the server side, continuously accepts incoming
+ * Function runs on the server side, continuously accepts incoming
  * connections, receives requests from clients
  */
 void rpc_serve_all(rpc_server *srv) {
@@ -314,17 +390,13 @@ void rpc_serve_all(rpc_server *srv) {
 
     /* reference from Beej's guide */
     struct sockaddr_storage their_addr;
-    socklen_t addr_size;
+    socklen_t addr_size = sizeof(their_addr);
     char s[INET6_ADDRSTRLEN];
 
     while (1) {
-
         // accept an incoming connection
-        addr_size = sizeof(their_addr);
-        srv->new_fd =
-            accept(srv->socket_fd, (struct sockaddr *)&their_addr, &addr_size);
+        srv->new_fd = accept_connection(srv, &their_addr, addr_size);
         if (srv->new_fd == -1) {
-            perror("accept");
             continue;
         }
 
@@ -333,58 +405,67 @@ void rpc_serve_all(rpc_server *srv) {
                   get_in_addr((struct sockaddr *)&their_addr), s, sizeof(s));
 
         while (1) {
-
             // receive request byte stream
-            size_t request_len = sizeof(rpc_data);
-            char request_buffer[request_len];
+            char request_buffer[REQUEST_LEN];
             ssize_t bytes_received =
-                recv(srv->new_fd, request_buffer, request_len, 0);
+                recv(srv->new_fd, request_buffer, REQUEST_LEN, 0);
             if (bytes_received <= 0) {
                 break;
             }
 
             // copy the received byte stream into an rpc_data struct
             rpc_data request;
-            size_t offset = 0;
-
-            // deserialize data1 and data2_len from network byte order to host
-            // byte order
-            uint64_t data1_net;
-            uint32_t data2_len_net;
-
-            memcpy(&data1_net, request_buffer + offset, sizeof(data1_net));
-            offset += sizeof(data1_net);
-
-            memcpy(&data2_len_net, request_buffer + offset,
-                   sizeof(data2_len_net));
-            offset += sizeof(data2_len_net);
-
-            request.data1 = be64toh(data1_net);
-            request.data2_len = ntohl(data2_len_net);
+            deserialize_data(request_buffer, &request);
 
             if (request.data2_len == 0) {
-
                 handle_lookup_request(srv, &request, srv->new_fd);
-
             } else {
-
                 handle_function_invocation(srv, &request, srv->new_fd);
             }
-
-            // // Send the response data1 to the client
-            // if (response != NULL) {
-            //     printf("\tresponse: %d\n", response->data1);
-            //     if (send(srv->new_fd, &(response->data1), sizeof(int), 0) ==
-            //         -1) {
-            //         perror("send");
-            //     }
-
-            //     free(response);
-            // }
         }
 
         close(srv->new_fd);
     }
+}
+
+/**
+ * Creates and connects a socket using the given address information.
+ */
+static int create_and_connect_socket(struct addrinfo *res) {
+    int socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (socket_fd == -1) {
+        perror("socket");
+        return -1;
+    }
+
+    if (connect(socket_fd, res->ai_addr, res->ai_addrlen) == -1) {
+        perror("connect");
+        close(socket_fd);
+        return -1;
+    }
+
+    return socket_fd;
+}
+
+/* Retrieve server information for a given address and port */
+static struct addrinfo *get_server_info(char *addr, int port) {
+    struct addrinfo hints, *res;
+    char port_str[PORT_LEN];
+    int status;
+
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET6;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    if ((status = getaddrinfo(addr, port_str, &hints, &res) != 0)) {
+        fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+        return NULL;
+    }
+
+    return res;
 }
 
 /**
@@ -394,38 +475,18 @@ void rpc_serve_all(rpc_server *srv) {
 rpc_client *rpc_init_client(char *addr, int port) {
     rpc_client *client = (rpc_client *)malloc(sizeof(rpc_client));
     if (client == NULL) {
+        perror("malloc");
         return NULL;
     }
 
-    int status;
-    struct addrinfo hints;
-    struct addrinfo *res;
-    char port_str[PORT_LEN];
-
-    // convert int port to string
-    snprintf(port_str, sizeof(port_str), "%d", port);
-
-    // load up address structs with getaddrinfo(), referencing Beej's guide
-    memset(&hints, 0, sizeof hints); // ensure the struct is empty
-    hints.ai_family = AF_INET6;      // set the struct to be IPv6
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;
-
-    if ((status = getaddrinfo(addr, port_str, &hints, &res)) != 0) {
-        fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+    struct addrinfo *res = get_server_info(addr, port);
+    if (res == NULL) {
+        free(client);
         return NULL;
     }
 
-    // create a socket
-    client->socket_fd =
-        socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    client->socket_fd = create_and_connect_socket(res);
     if (client->socket_fd == -1) {
-        perror("socket");
-        return NULL;
-    }
-
-    if (connect(client->socket_fd, res->ai_addr, res->ai_addrlen) == -1) {
-        perror("connect");
         free(client);
         return NULL;
     }
@@ -435,6 +496,7 @@ rpc_client *rpc_init_client(char *addr, int port) {
     return client;
 }
 
+/* Serializes a given RPC data request into a byte stream */
 static char *serialize_payload(rpc_data *request) {
     // prepare the payload byte stream
     size_t payload_len = sizeof(rpc_data);
@@ -447,7 +509,6 @@ static char *serialize_payload(rpc_data *request) {
 
     size_t offset = 0;
 
-    // copy the data1 and data2_len into payload with network byte order
     uint64_t data1_net = htobe64(request->data1);
     uint32_t data2_len_net = htonl(request->data2_len);
 
@@ -476,18 +537,10 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
         return NULL;
     }
 
-    size_t payload_len = sizeof(rpc_data);
-
-    // send the payload
-    if (send(cl->socket_fd, payload, payload_len, 0) == -1) {
-        perror("send");
+    // send payload and function name
+    if (send_payload(cl->socket_fd, payload, sizeof(rpc_data)) == ERROR ||
+        send_payload(cl->socket_fd, name, name_len) == ERROR) {
         free(payload);
-        return NULL;
-    }
-
-    // send the function name
-    if (send(cl->socket_fd, name, name_len, 0) == -1) {
-        perror("send");
         return NULL;
     }
 
@@ -532,9 +585,8 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     }
 
     // inconsistent call data2 null and data2_len is non-zero and vice-versa
-    if (payload->data2 == NULL && payload->data2_len != 0) {
-        return NULL;
-    } else if (payload->data2 != NULL && payload->data2_len == 0) {
+    if ((payload->data2 == NULL && payload->data2_len != 0) ||
+        (payload->data2 != NULL && payload->data2_len == 0)) {
         return NULL;
     }
 
@@ -549,10 +601,8 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
         return NULL;
     }
 
-    size_t payload_len = sizeof(rpc_data);
-
     // send the serialized data to the server
-    if (send(cl->socket_fd, request_payload, payload_len, 0) == -1) {
+    if (send(cl->socket_fd, request_payload, sizeof(rpc_data), 0) == -1) {
         perror("send");
         return NULL;
     }
