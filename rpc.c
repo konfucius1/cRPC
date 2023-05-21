@@ -179,24 +179,36 @@ static int find_function_index(rpc_server *server, char *function_name) {
 
 static rpc_data *handle_lookup_request(rpc_server *srv, rpc_data *request,
                                        int socket_fd) {
-    char *function_name = malloc(request->data1 + 1);
+
+    /* printf("SERVE_ALL Data received after DSR.\n");
+    printf("data1: %d\n", request->data1);
+    printf("data2_len: %zu\n", request->data2_len);
+    if (request->data2 != NULL) {
+        printf("data2: %s\n", (char *)request->data2);
+    } else {
+        printf("data2: NULL\n");
+    } */
+
     rpc_data *response = malloc(sizeof(rpc_data));
 
+    char *function_name = malloc(request->data1 + 1);
+    // printf("Waiting for function_name\n");
     if (recv(socket_fd, function_name, request->data1, 0) == -1) {
         perror("recv");
         free(function_name);
         free(response);
         return NULL;
     }
+    // printf("Received function_name\n");
 
     function_name[request->data1] = '\0';
 
     int function_index = find_function_index(srv, function_name);
 
     if (function_index != -1) {
-        response->data1 = function_index;
+        response->data1 = htobe64((uint64_t)function_index);
     } else {
-        response->data1 = -1;
+        response->data1 = htobe64((uint64_t)-1);
     }
 
     // serialize the response into a byte stream
@@ -221,6 +233,16 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
         return NULL;
     }
 
+    // /* print request_data */
+    // printf("Request Data: \n");
+    // printf("data1: %d \n", request->data1);
+    // printf("data2_len: %ld \n", request->data2_len);
+    // if (request->data2 != NULL) {
+    //     printf("data2: %d\n", *((char *)request->data2));
+    // } else {
+    //     printf("data2: NULL\n");
+    // }
+
     if (recv(socket_fd, data2, request->data2_len, 0) == -1) {
         perror("recv");
         free(data2);
@@ -229,6 +251,7 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
 
     request->data2 = data2;
 
+    // receive function_index
     int function_index;
     if (recv(socket_fd, &function_index, sizeof(int), 0) == -1) {
         perror("recv");
@@ -242,7 +265,7 @@ static rpc_data *handle_function_invocation(rpc_server *srv, rpc_data *request,
     }
 
     // /* print request_data */
-    // printf("Request Data: \n");
+    // printf("***Request Data: \n");
     // printf("data1: %d \n", request->data1);
     // printf("data2_len: %ld \n", request->data2_len);
     // if (request->data2 != NULL) {
@@ -397,22 +420,36 @@ void rpc_serve_all(rpc_server *srv) {
             ssize_t bytes_received =
                 recv(srv->new_fd, request_buffer, request_len, 0);
             if (bytes_received <= 0) {
-                // testing byte stream
-                // if (bytes_received == 0) {
-                //     printf("Connection closed by client.\n");
-                // } else {
-                //     perror("recv");
-                // }
                 break;
             }
 
             // Copy the received byte stream into an rpc_data struct
             rpc_data request;
-            memcpy(&request, request_buffer, request_len);
+            size_t offset = 0;
 
-            // printf("Data received.\n");
+            // Deserialize data1 and data2_len from network byte order to host
+            // byte order
+            uint64_t data1_net;
+            uint32_t data2_len_net;
+
+            memcpy(&data1_net, request_buffer + offset, sizeof(data1_net));
+            offset += sizeof(data1_net);
+
+            memcpy(&data2_len_net, request_buffer + offset,
+                   sizeof(data2_len_net));
+            offset += sizeof(data2_len_net);
+
+            // printf("SERVE_ALL Data received before DSR.\n");
             // printf("data1: %d\n", request.data1);
             // printf("data2_len: %zu\n", request.data2_len);
+            // if (request.data2 != NULL) {
+            //     printf("data2: %s\n", (char *)request.data2);
+            // } else {
+            //     printf("data2: NULL\n");
+            // }
+
+            request.data1 = be64toh(data1_net);
+            request.data2_len = ntohl(data2_len_net);
 
             if (request.data2_len == 0) {
                 // printf("handle for lookup request\n");
@@ -492,50 +529,114 @@ rpc_client *rpc_init_client(char *addr, int port) {
     return client;
 }
 
+static char *serialize_payload(rpc_data *request) {
+    // Prepare the payload byte stream
+    size_t payload_len = sizeof(rpc_data);
+    char *payload = (char *)malloc(payload_len);
+
+    if (!payload) {
+        perror("malloc");
+        return NULL;
+    }
+
+    size_t offset = 0;
+
+    // copy the data1 and data2_len into payload with network byte order
+    uint64_t data1_net = htobe64(request->data1);
+    uint32_t data2_len_net = htonl(request->data2_len);
+
+    memcpy(payload + offset, &data1_net, sizeof(data1_net));
+    offset += sizeof(data1_net);
+
+    memcpy(payload + offset, &data2_len_net, sizeof(data2_len_net));
+    offset += sizeof(data2_len_net);
+
+    return payload;
+}
+
 rpc_handle *rpc_find(rpc_client *cl, char *name) {
     if (cl == NULL || name == NULL) {
         return NULL;
     }
 
-    // prepare the request struct
-    rpc_data request = {.data1 = strlen(name), .data2 = NULL, .data2_len = 0};
+    size_t name_len = strlen(name);
+    // printf("name_len %ld\n", name_len);
 
-    // Prepare the payload byte stream
-    size_t payload_len = sizeof(rpc_data) + strlen(name);
-    char payload[payload_len];
-    size_t offset = 0;
+    // Prepare the request struct
+    rpc_data request = {.data1 = name_len, .data2 = NULL, .data2_len = 0};
 
-    memcpy(payload, &request, sizeof(rpc_data));
-    offset += sizeof(rpc_data);
+    // // Debugging output
+    // printf("rpc_find contents:\n");
+    // printf("request.data1: %ld\n", name_len);
+    // printf("request.data2_len: %ld\n", request.data2_len);
+    // if (request.data2 != NULL) {
+    //     printf("data2: %s\n", (char *)request.data2);
+    // } else {
+    //     printf("data2: NULL\n");
+    // }
 
-    memcpy(payload + sizeof(rpc_data), name, strlen(name));
-    offset += strlen(name);
+    // // Copy the name into payload
+    // memcpy(payload + offset, name, name_len);
+    // offset += name_len;
 
-    // Send the payload
-    if (send(cl->socket_fd, payload, offset, 0) == -1) {
+    // serialize the request struct and name into payload
+    char *payload = serialize_payload(&request);
+    if (payload == NULL) {
+        return NULL;
+    }
+
+    size_t payload_len = sizeof(rpc_data);
+
+    // send the payload
+    if (send(cl->socket_fd, payload, payload_len, 0) == -1) {
+        perror("send");
+        free(payload);
+        return NULL;
+    }
+
+    // send the function name
+    if (send(cl->socket_fd, name, name_len, 0) == -1) {
         perror("send");
         return NULL;
     }
 
+    free(payload);
+
     rpc_data response;
     if (recv(cl->socket_fd, &response, sizeof(rpc_data), 0) == -1) {
-        perror("receive");
+        perror("recv");
         return NULL;
     }
 
-    if (response.data1 == -1) {
+    response.data1 = ntohl(response.data1);
+
+    uint64_t invalid_response = (uint64_t)-1;
+    if (response.data1 == invalid_response) {
         return NULL;
-    } else {
-        rpc_handle *function_handle = (rpc_handle *)malloc(sizeof(rpc_handle));
-        function_handle->index = response.data1;
-        return function_handle;
     }
+    rpc_handle *function_handle = (rpc_handle *)malloc(sizeof(rpc_handle));
+    if (!function_handle) {
+        perror("malloc");
+        return NULL;
+    }
+
+    function_handle->index = response.data1;
+    return function_handle;
 }
 
 rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     if (cl == NULL || h == NULL || payload == NULL) {
         return NULL;
     }
+
+    // printf("RPC_CALL: PAYLOAD TO SEND\n");
+    // printf("data1: %d \n", payload->data1);
+    // printf("data2_len: %ld \n", payload->data2_len);
+    // if (payload->data2 != NULL) {
+    //     printf("data2: %d\n", *((char *)payload->data2));
+    // } else {
+    //     printf("data2: NULL\n");
+    // }
 
     if (payload->data2_len >= 100000) {
         fprintf(stderr, "Overlength error");
@@ -554,25 +655,29 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
                         .data2 = payload->data2,
                         .data2_len = payload->data2_len};
 
-    // prepare the buffer for serialization
-    size_t buffer_size = sizeof(rpc_data) + request.data2_len;
-    char buffer[buffer_size];
-    size_t offset = 0;
-
-    // serialize the request struct into the buffer
-    memcpy(buffer, &request, sizeof(rpc_data));
-    offset += sizeof(rpc_data);
-
-    // serialize the payload data2 into the buffer if it exists
-    if (request.data2_len > 0 && request.data2 != NULL) {
-        memcpy(buffer + offset, request.data2, request.data2_len);
-        offset += request.data2_len;
+    // serialize the request struct and name into payload
+    char *request_payload = serialize_payload(&request);
+    if (request_payload == NULL) {
+        return NULL;
     }
 
+    size_t payload_len = sizeof(rpc_data);
+
     // send the serialized data to the server
-    if (send(cl->socket_fd, buffer, buffer_size, 0) == -1) {
+    if (send(cl->socket_fd, request_payload, payload_len, 0) == -1) {
         perror("send");
         return NULL;
+    }
+
+    // Send the payload data2 if it exists
+    if (request.data2_len > 0 && request.data2 != NULL) {
+        size_t data2_len = request.data2_len;
+
+        // Send the serialized payload data2 to the server
+        if (send(cl->socket_fd, request.data2, data2_len, 0) == -1) {
+            perror("send");
+            return NULL;
+        }
     }
 
     // send the function index to the server
