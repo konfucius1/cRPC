@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +25,9 @@
 #define SUCCESS 0
 #define REQUEST_LEN sizeof(rpc_data)
 #define INVALID (uint64_t) - 1
+#define NONBLOCKING
+#define FIND 1
+#define CALL 2
 
 typedef struct registered_function {
     char *name;          // name of the remote procedure
@@ -111,7 +115,8 @@ rpc_server *rpc_init_server(int port) {
 /* Function to add a registered function to the server */
 static void add_function_to_server(rpc_server *server,
                                    registered_function *new_function) {
-    for (int i = 0; i < server->functions_count; i++) {
+    int i;
+    for (i = 0; i < server->functions_count; i++) {
         if (strcmp(server->functions[i].name, new_function->name) == 0) {
             // Function with the same name already exists, replace it
             server->functions[i] = *new_function;
@@ -157,15 +162,6 @@ int rpc_register(rpc_server *srv, char *name, rpc_handler handler) {
     return SUCCESS;
 }
 
-/* From Beej's guide: helper function to get sockaddr, IPv4 or IPv6 */
-static void *get_in_addr(struct sockaddr *sa) {
-    if (sa->sa_family == AF_INET) {
-        return &(((struct sockaddr_in *)sa)->sin_addr);
-    }
-
-    return &(((struct sockaddr_in6 *)sa)->sin6_addr);
-}
-
 /**
  * Finds the index of a registered function in a given RPC server by comparing
  * its name to a given function name
@@ -203,7 +199,7 @@ static void handle_lookup_request(rpc_server *srv, rpc_data *request,
         return;
     }
 
-    // receive function name from client
+    // receive function strlen from client
     if (recv(socket_fd, function_name, request->data1, 0) == ERROR) {
         perror("recv");
         free(function_name);
@@ -245,7 +241,7 @@ static void send_serialized_data_to_client(int socket_fd, rpc_data *response) {
 
     size_t offset = 0;
 
-    // serialize the response struct into the buffer
+    // serialize the responses into the buffer
     uint64_t data1_network = htobe64(response->data1);
     memcpy(buffer + offset, &data1_network, sizeof(uint64_t));
     offset += sizeof(uint64_t);
@@ -269,8 +265,8 @@ static void send_serialized_data_to_client(int socket_fd, rpc_data *response) {
 
 /* Receives and validates function index from the client */
 static int receive_and_validate_index(int socket_fd, int *function_index) {
-    u_int64_t function_index_network_order;
-    if (recv(socket_fd, &function_index_network_order, sizeof(u_int64_t), 0) ==
+    uint64_t function_index_network_order;
+    if (recv(socket_fd, &function_index_network_order, sizeof(uint64_t), 0) ==
         ERROR) {
         perror("recv");
         return ERROR;
@@ -371,6 +367,43 @@ static void deserialize_data(char *request_buffer, rpc_data *request) {
 }
 
 /**
+ * Handles incoming requests for a RPC server by receiving request codes and
+ * byte streams, copying them into an rpc_data struct, and invoking the
+ * target function based on the request code.
+ */
+static void *handle_connection(void *args) {
+    rpc_server *srv = (rpc_server *)args;
+
+    while (1) {
+        uint64_t request_code;
+        if (recv(srv->new_fd, &request_code, sizeof(uint64_t), 0) == ERROR) {
+            perror("recv");
+        }
+
+        // receive request byte stream
+        char request_buffer[REQUEST_LEN];
+        ssize_t bytes_received =
+            recv(srv->new_fd, request_buffer, REQUEST_LEN, 0);
+        if (bytes_received <= 0) {
+            break;
+        }
+
+        // copy the received byte stream into an rpc_data struct
+        rpc_data request;
+        deserialize_data(request_buffer, &request);
+
+        if (request_code == FIND) {
+            handle_lookup_request(srv, &request, srv->new_fd);
+        } else {
+            handle_function_invocation(srv, &request, srv->new_fd);
+        }
+    }
+
+    free(srv);
+    return NULL;
+}
+
+/**
  * Function runs on the server side, continuously accepts incoming
  * connections, receives requests from clients
  */
@@ -379,10 +412,8 @@ void rpc_serve_all(rpc_server *srv) {
         return;
     }
 
-    /* reference from Beej's guide */
     struct sockaddr_storage their_addr;
     socklen_t addr_size = sizeof(their_addr);
-    char s[INET6_ADDRSTRLEN];
 
     while (1) {
         // accept an incoming connection
@@ -391,31 +422,20 @@ void rpc_serve_all(rpc_server *srv) {
             continue;
         }
 
-        // convert client IP to string
-        inet_ntop(their_addr.ss_family,
-                  get_in_addr((struct sockaddr *)&their_addr), s, sizeof(s));
+        // create new server
+        rpc_server *new_srv = malloc(sizeof(rpc_server));
+        *new_srv = *srv;
 
-        while (1) {
-            // receive request byte stream
-            char request_buffer[REQUEST_LEN];
-            ssize_t bytes_received =
-                recv(srv->new_fd, request_buffer, REQUEST_LEN, 0);
-            if (bytes_received <= 0) {
-                break;
-            }
+        pthread_t thread_id;
 
-            // copy the received byte stream into an rpc_data struct
-            rpc_data request;
-            deserialize_data(request_buffer, &request);
-
-            if (request.data2_len == 0) {
-                handle_lookup_request(srv, &request, srv->new_fd);
-            } else {
-                handle_function_invocation(srv, &request, srv->new_fd);
-            }
+        // create a new thread to handle the new connection
+        if (pthread_create(&thread_id, NULL, handle_connection, new_srv) ==
+            ERROR) {
+            free(new_srv);
+            continue;
         }
 
-        close(srv->new_fd);
+        pthread_detach(thread_id);
     }
 }
 
@@ -512,8 +532,18 @@ static char *serialize_payload(rpc_data *request) {
     return payload;
 }
 
+/**
+ * The function rpc_find sends a request to find a function by name and returns
+ * a handle to the function if found.
+ */
 rpc_handle *rpc_find(rpc_client *cl, char *name) {
     if (cl == NULL || name == NULL) {
+        return NULL;
+    }
+
+    // send request code
+    uint64_t request_code = FIND;
+    if (send(cl->socket_fd, &request_code, sizeof(uint64_t), 0) == ERROR) {
         return NULL;
     }
 
@@ -564,19 +594,30 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
     return function_handle;
 }
 
+/**
+ * Send a request to a server and receives a response, while handling
+ * serialization and deserialization of data.
+ */
 rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
-    if (cl == NULL || h == NULL || payload == NULL) {
-        return NULL;
-    }
 
-    if (payload->data2_len >= 100000) {
-        fprintf(stderr, "Overlength error");
+    if (cl == NULL || h == NULL || payload == NULL) {
         return NULL;
     }
 
     // inconsistent call data2 null and data2_len is non-zero and vice-versa
     if ((payload->data2 == NULL && payload->data2_len != 0) ||
         (payload->data2 != NULL && payload->data2_len == 0)) {
+        return NULL;
+    }
+
+    // send request code
+    uint64_t request_code = CALL;
+    if (send(cl->socket_fd, &request_code, sizeof(uint64_t), 0) == ERROR) {
+        return NULL;
+    }
+
+    if (payload->data2_len >= 100000) {
+        fprintf(stderr, "Overlength error");
         return NULL;
     }
 
@@ -587,6 +628,7 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
 
     // serialize the request struct and name into payload
     char *request_payload = serialize_payload(&request);
+
     if (request_payload == NULL) {
         return NULL;
     }
@@ -597,11 +639,11 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
         return NULL;
     }
 
-    // Send the payload data2 if it exists
+    // send the payload data2 if it exists
     if (request.data2_len > 0 && request.data2 != NULL) {
         size_t data2_len = request.data2_len;
 
-        // Send the serialized payload data2 to the server
+        // send the serialized payload data2 to the server
         if (send(cl->socket_fd, request.data2, data2_len, 0) == ERROR) {
             perror("send");
             return NULL;
@@ -609,10 +651,10 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     }
 
     // convert index to network byte order and send to the server
-    u_int64_t index_network_order = htonl((uint64_t)h->index);
+    uint64_t index_network_order = htonl((uint64_t)h->index);
 
     // send the function index to the server
-    if (send(cl->socket_fd, &index_network_order, sizeof(uint32_t), 0) ==
+    if (send(cl->socket_fd, &index_network_order, sizeof(uint64_t), 0) ==
         ERROR) {
         perror("send");
         return NULL;
