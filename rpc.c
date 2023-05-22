@@ -24,7 +24,7 @@
 #define ERROR -1
 #define SUCCESS 0
 #define REQUEST_LEN sizeof(rpc_data)
-#define INVALID (uint64_t) - 1
+#define INVALID_64BIT (uint64_t) - 1
 #define NONBLOCKING
 #define FIND 1
 #define CALL 2
@@ -216,7 +216,7 @@ static void handle_lookup_request(rpc_server *srv, rpc_data *request,
     if (function_index != NOT_FOUND) {
         data_function_index = htobe64((uint64_t)function_index);
     } else {
-        data_function_index = htobe64(INVALID);
+        data_function_index = htobe64(INVALID_64BIT);
     }
 
     // send the response to the client
@@ -369,7 +369,7 @@ static void deserialize_data(char *request_buffer, rpc_data *request) {
 /**
  * Handles incoming requests for a RPC server by receiving request codes and
  * byte streams, copying them into an rpc_data struct, and invoking the
- * target function based on the request code.
+ * target function based on the request code
  */
 static void *handle_connection(void *args) {
     rpc_server *srv = (rpc_server *)args;
@@ -440,7 +440,7 @@ void rpc_serve_all(rpc_server *srv) {
 }
 
 /**
- * Creates and connects a socket using the given address information.
+ * Creates and connects a socket using the given address information
  */
 static int create_and_connect_socket(struct addrinfo *res) {
     int socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
@@ -534,7 +534,7 @@ static char *serialize_payload(rpc_data *request) {
 
 /**
  * The function rpc_find sends a request to find a function by name and returns
- * a handle to the function if found.
+ * a handle to the function if found
  */
 rpc_handle *rpc_find(rpc_client *cl, char *name) {
     if (cl == NULL || name == NULL) {
@@ -579,7 +579,7 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
     // convert big endian to host byte order
     received_data = be64toh(received_data);
 
-    if (received_data == INVALID) {
+    if (received_data == INVALID_64BIT) {
         return NULL;
     }
 
@@ -596,7 +596,7 @@ rpc_handle *rpc_find(rpc_client *cl, char *name) {
 
 /**
  * Send a request to a server and receives a response, while handling
- * serialization and deserialization of data.
+ * serialization and deserialization of data
  */
 rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
 
@@ -721,6 +721,7 @@ rpc_data *rpc_call(rpc_client *cl, rpc_handle *h, rpc_data *payload) {
     return response;
 }
 
+/* Closes a client's socket and frees the memory allocated for the client */
 void rpc_close_client(rpc_client *cl) {
     if (cl == NULL) {
         return;
@@ -733,12 +734,15 @@ void rpc_close_client(rpc_client *cl) {
     free(cl);
 }
 
+/* Frees memory allocated for a given rpc_data structure */
 void rpc_data_free(rpc_data *data) {
     if (data == NULL) {
         return;
     }
+
     if (data->data2 != NULL) {
         free(data->data2);
     }
+
     free(data);
 }
