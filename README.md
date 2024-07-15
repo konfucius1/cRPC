@@ -1,6 +1,8 @@
 # cRPC (C Remote Procedure Call)
 
-This project implements a Remote Procedure Call (RPC) system in C. The system allows clients to call functions on a remote server as if they were local functions. The server registers functions that can be called by the clients, and the clients can invoke these functions with specified arguments and receive the results.
+This project implements a Remote Procedure Call (RPC) system in C. The system allows clients to call functions on a remote server as if they were local functions. The server registers functions that can be called by the clients, and the clients can invoke these functions with specified arguments and receive the results. 
+
+*Quite frankly, this serves as a good foundation for me to jump into learning modern tools like tRPC and gRPC*
 
 `rpc.h`: Header file containing the declarations of the RPC structures and functions.\
 `client.c`: Client implementation that initializes the RPC client, finds the function handle, and makes RPC calls.\
@@ -29,8 +31,7 @@ make all
 Running the Server
 Start the RPC server with the following command:
 
-```
-sh
+```sh
 ./server -p <port>
 Replace <port> with the desired port number.
 ```
