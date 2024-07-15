@@ -39,7 +39,6 @@ Running the Client
 Start the RPC client with the following command:
 
 ```sh
-Copy code
 ./client -i <ip-address> -p <port>
 Replace <ip-address> with the server's IP address and <port> with the server's port number.
 ```
